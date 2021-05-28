@@ -1,6 +1,8 @@
 # WhisperPlot
 
-A better chia plotter.
+A better chia plotter. 
+
+Only supports Linux.
 
 Bits of this were originally from Chia-Network/chiapos, most of it is new code.
 

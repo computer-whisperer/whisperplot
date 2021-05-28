@@ -1,4 +1,4 @@
-#include "../inc/buffers.hpp"
+#include "../inc/buffer.hpp"
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <stdio.h>
@@ -14,7 +14,7 @@
 using namespace std;
 
 std::string buffer_tmpdir = "/tmp";
-bool buffer_use_tmp = true;
+bool buffer_use_tmp = false;
 
 Buffer::Buffer(const uint64_t size, string name)
 {
