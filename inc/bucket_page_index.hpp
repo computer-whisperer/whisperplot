@@ -11,9 +11,14 @@ template<uint8_t K, int8_t table_index> struct BucketPageIndexEntry_YCSizes {
     static constexpr uint32_t c_len_bits = K;
 };
 
-template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 1> {
+template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 0> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*2;
+};
+
+template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 1> {
+    static constexpr uint32_t y_len_bits = K+kExtraBits;
+    static constexpr uint32_t c_len_bits = K*4;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 2> {
@@ -23,20 +28,15 @@ template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 2> {
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 3> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
-    static constexpr uint32_t c_len_bits = K*4;
+    static constexpr uint32_t c_len_bits = K*3;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 4> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
-    static constexpr uint32_t c_len_bits = K*3;
-};
-
-template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 5> {
-    static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*2;
 };
 
-template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 6> {
+template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 5> {
     static constexpr uint32_t y_len_bits = K;
     static constexpr uint32_t c_len_bits = 0;
 };
@@ -60,7 +60,7 @@ template<uint8_t K, int8_t table_index> struct YCBucketEntry
     static struct BucketPageIndexEntry_YCSizes<K, table_index> sizes;
     static constexpr uint32_t bucket_divisor = kBC;
     static constexpr uint32_t num_buckets = (1ULL << sizes.y_len_bits)/bucket_divisor + 1;
-    static constexpr uint32_t max_entries_per_bucket = 300;
+    static constexpr uint32_t max_entries_per_bucket = 350;
     static constexpr uint32_t trimmed_y_len_bits = sizes.y_len_bits - floorlog2(num_buckets);
     static constexpr uint32_t packed_entry_len_bits = trimmed_y_len_bits + sizes.c_len_bits;
     static constexpr uint32_t packed_entry_len_bytes = (packed_entry_len_bits+7)/8;

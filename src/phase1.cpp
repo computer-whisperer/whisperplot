@@ -2,6 +2,7 @@
 #include <vector>
 #include <atomic>
 #include <cstring>
+#include <ctime>
 
 #include "bucket_page_index.hpp"
 #include "buffer.hpp"
@@ -103,7 +104,7 @@ void Phase1<K>::ThreadB(
                             new_entry.y %= (1ULL << K);
                         }
                         uint64_t new_entry_id = new_bucket_index->InsertEntry(new_entry);
-
+                        uint64_t new_bucket_id = new_entry.get_bucket_id();
 
                         // Emit a new line point for sorting into the phase1 output buffer
                         uint64_t x, y;
@@ -120,7 +121,7 @@ void Phase1<K>::ThreadB(
                         }
                         LinePointEntryUIDBucketEntry<K> line_point_entry;
                         line_point_entry.line_point = Encoding::SquareToLinePoint(x, y);
-                        line_point_entry.entry_uid = new_bucket_index->GetUniqueIdentifier(bucket_id, new_entry_id);
+                        line_point_entry.entry_uid = new_bucket_index->GetUniqueIdentifier(new_bucket_id, new_entry_id);
                         assert(line_point_entry.entry_uid < (1ULL << (K + 2)));
                         new_line_point_bucket_index->InsertEntry(line_point_entry);
                     }
@@ -179,7 +180,7 @@ void Phase1<K>::ThreadD(
     while (true)
     {
         uint64_t bucket_id = coordinator.fetch_add(1);
-        if (bucket_id >= YCBucketEntry<K, 6>::num_buckets)
+        if (bucket_id >= YCBucketEntry<K, 5>::num_buckets)
             break;
 // Sort all entries in this bucket
         YCBucketEntry<K, 5> entries[YCBucketEntry<K, 5>::max_entries_per_bucket];
@@ -201,7 +202,7 @@ void Phase1<K>::ThreadD(
         auto new_park = new TemporaryPark<finaltable_y_delta_len_bits>(num_entries);
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->Bind(buffers[6]->data + buffers[6]->GetInsertionOffset(num_bytes));
-        uint128_t line_points[YCBucketEntry<K, 6>::max_entries_per_bucket];
+        uint128_t line_points[YCBucketEntry<K, 5>::max_entries_per_bucket];
         for (uint32_t i = 0; i < num_entries; i++)
         {
             line_points[i] = entries[i].y;
@@ -220,7 +221,8 @@ BucketPageIndex<YCBucketEntry<K, table_index>>* Phase1<K>::DoTable(
     next_bucket_index->pops_required_per_bucket = 2;
     BucketPageIndex<LinePointEntryUIDBucketEntry<K>> new_line_point_bucket_index;
 
-    cout << "Started B "<< table_index << endl;
+    cout << "Part B"<< (uint32_t)table_index;
+    uint64_t start_seconds = time(NULL);
     vector<thread> threads;
     coordinator = 0;
     for (uint32_t i = 0; i < num_threads; i++)
@@ -236,6 +238,7 @@ BucketPageIndex<YCBucketEntry<K, table_index>>* Phase1<K>::DoTable(
         it.join();
     }
     delete prev_bucket_index;
+    cout << " (" << time(NULL) - start_seconds << "s)" << endl;
 
 // Unfortunately single-threaded, but not much can be done to help it
     new_line_point_bucket_index.SumBucketOffsets();
@@ -246,7 +249,8 @@ BucketPageIndex<YCBucketEntry<K, table_index>>* Phase1<K>::DoTable(
     graph_parks.push_back(vector<TemporaryPark<line_point_delta_len_bits>*>(LinePointEntryUIDBucketEntry<K>::num_buckets));
 
     coordinator = 0;
-    cout << "Started C "<< table_index << endl;
+    cout << "Part C"<< (uint32_t)table_index;
+    start_seconds = time(NULL);
     threads.clear();
     for (uint32_t i = 0; i < num_threads; i++)
     {
@@ -257,12 +261,15 @@ BucketPageIndex<YCBucketEntry<K, table_index>>* Phase1<K>::DoTable(
     {
         it.join();
     }
+    cout << " (" << time(NULL) - start_seconds << "s)" << endl;
     return next_bucket_index;
 }
 
 template <uint8_t K>
 Phase1<K>::Phase1(const uint8_t* id_in, uint32_t num_threads_in)
 {
+    uint64_t phase_start_seconds = time(NULL);
+
     id = id_in;
     num_threads = num_threads_in;
 
@@ -270,7 +277,8 @@ Phase1<K>::Phase1(const uint8_t* id_in, uint32_t num_threads_in)
 
     new_entry_positions.resize(1ULL<<(K+2));
 
-    cout << "Started A"<< endl;
+    cout << "Part A";
+    uint64_t part_start_seconds = time(NULL);
     vector<thread> threads;
     coordinator = 0;
     for (uint32_t i = 0; i < num_threads; i++)
@@ -282,6 +290,7 @@ Phase1<K>::Phase1(const uint8_t* id_in, uint32_t num_threads_in)
     {
         it.join();
     }
+    cout << " (" << time(NULL) - part_start_seconds << "s)" << endl;
 
     auto i0 = DoTable<0>(first_bucket_index);
     auto i1 = DoTable<1>(i0);
@@ -290,7 +299,12 @@ Phase1<K>::Phase1(const uint8_t* id_in, uint32_t num_threads_in)
     auto i4 = DoTable<4>(i3);
     auto i5 = DoTable<5>(i4);
 
-    cout << "Started D"<< endl;
+    TemporaryPark<finaltable_y_delta_len_bits> test_park(YCBucketEntry<K, 5>::max_entries_per_bucket);
+    buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCBucketEntry<K, 5>::num_buckets));
+    final_parks.resize(YCBucketEntry<K, 5>::num_buckets);
+
+    cout << "Part D";
+    part_start_seconds = time(NULL);
     threads.clear();
     coordinator = 0;
     for (uint32_t i = 0; i < num_threads; i++)
@@ -301,7 +315,8 @@ Phase1<K>::Phase1(const uint8_t* id_in, uint32_t num_threads_in)
     {
         it.join();
     }
-
+    cout << " (" << time(NULL) - part_start_seconds << "s)" << endl;
+    cout << "Phase1 finished in " << time(NULL) - phase_start_seconds << "s" << endl;
 }
 
 template class Phase1<18>;

@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#include "bits.hpp"
+
 #include <stdint.h>
 
 #include <algorithm>
@@ -21,8 +23,9 @@
 #include <utility>
 #include <vector>
 
+
 #include "b3/blake3.h"
-#include "bits.hpp"
+
 #include "chacha8.h"
 #include "pos_constants.hpp"
 #include "util.hpp"

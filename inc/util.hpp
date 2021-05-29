@@ -45,12 +45,7 @@ constexpr inline Int cdiv(Int a, int b) { return (a + b - 1) / b; }
 typedef __uint128_t uint128_t;
 
 // Allows printing of uint128_t
-inline std::ostream &operator<<(std::ostream &strm, uint128_t const &v)
-{
-    strm << "uint128(" << (uint64_t)(v >> 64) << "," << (uint64_t)(v & (((uint128_t)1 << 64) - 1))
-         << ")";
-    return strm;
-}
+std::ostream &operator<<(std::ostream &strm, uint128_t const &v);
 
 #endif
 
@@ -74,6 +69,7 @@ inline uint64_t bswap_64(uint64_t x) { return __builtin_bswap64(x); }
 #error "unknown compiler, don't know how to swap bytes"
 #endif
 
+
 /* Platform-specific cpuid include. */
 #if defined(_WIN32)
 #include <intrin.h>
@@ -81,57 +77,14 @@ inline uint64_t bswap_64(uint64_t x) { return __builtin_bswap64(x); }
 #include <cpuid.h>
 #endif
 
+
+char *TimerGetNow();
+
 class Timer {
 public:
-    Timer()
-    {
-        wall_clock_time_start_ = std::chrono::steady_clock::now();
-#if _WIN32
-        ::GetProcessTimes(::GetCurrentProcess(), &ft_[3], &ft_[2], &ft_[1], &ft_[0]);
-#else
-        cpu_time_start_ = clock();
-#endif
-    }
+    Timer();
 
-    static char *GetNow()
-    {
-        auto now = std::chrono::system_clock::now();
-        auto tt = std::chrono::system_clock::to_time_t(now);
-        return ctime(&tt);  // ctime includes newline
-    }
-
-    void PrintElapsed(const std::string &name) const
-    {
-        auto end = std::chrono::steady_clock::now();
-        auto wall_clock_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 end - this->wall_clock_time_start_)
-                                 .count();
-
-#if _WIN32
-        FILETIME nowft_[6];
-        nowft_[0] = ft_[0];
-        nowft_[1] = ft_[1];
-
-        ::GetProcessTimes(::GetCurrentProcess(), &nowft_[5], &nowft_[4], &nowft_[3], &nowft_[2]);
-        ULARGE_INTEGER u[4];
-        for (size_t i = 0; i < 4; ++i) {
-            u[i].LowPart = nowft_[i].dwLowDateTime;
-            u[i].HighPart = nowft_[i].dwHighDateTime;
-        }
-        double user = (u[2].QuadPart - u[0].QuadPart) / 10000.0;
-        double kernel = (u[3].QuadPart - u[1].QuadPart) / 10000.0;
-        double cpu_time_ms = user + kernel;
-#else
-        double cpu_time_ms =
-            1000.0 * (static_cast<double>(clock()) - this->cpu_time_start_) / CLOCKS_PER_SEC;
-#endif
-
-        double cpu_ratio = static_cast<int>(10000 * (cpu_time_ms / wall_clock_ms)) / 100.0;
-
-        std::cout << name << " " << (wall_clock_ms / 1000.0) << " seconds. CPU (" << cpu_ratio
-                  << "%) " << Timer::GetNow();
-    }
-
+    void PrintElapsed(const std::string &name) const;
 private:
     std::chrono::time_point<std::chrono::steady_clock> wall_clock_time_start_;
 #if _WIN32
@@ -145,6 +98,7 @@ private:
 namespace Util {
 
     template <typename X>
+
     inline X Mod(X i, X n)
     {
         return (i % n + n) % n;
@@ -201,7 +155,7 @@ namespace Util {
         return bswap_64(i);
     }
 
-    static void IntTo16Bytes(uint8_t *result, const uint128_t input)
+    inline void IntTo16Bytes(uint8_t *result, const uint128_t input)
     {
         uint64_t r = bswap_64(input >> 64);
         memcpy(result, &r, sizeof(r));
@@ -341,24 +295,9 @@ namespace Util {
     }
 
 #if defined(_WIN32) || defined(__x86_64__)
-    inline void CpuID(uint32_t leaf, uint32_t *regs)
-    {
-#if defined(_WIN32)
-        __cpuid((int *)regs, (int)leaf);
-#else
-        __get_cpuid(leaf, &regs[0], &regs[1], &regs[2], &regs[3]);
-#endif /* defined(_WIN32) */
-    }
+    void CpuID(uint32_t leaf, uint32_t *regs);
 
-    inline bool HavePopcnt(void)
-    {
-        // EAX, EBX, ECX, EDX
-        uint32_t regs[4] = {0};
-
-        CpuID(1, regs);
-        // Bit 23 of ECX indicates POPCNT instruction support
-        return (regs[2] >> 23) & 1;
-    }
+    bool HavePopcnt(void);
 #endif /* defined(_WIN32) || defined(__x86_64__) */
 
     inline uint64_t PopCount(uint64_t n)

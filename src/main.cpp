@@ -38,6 +38,6 @@ int main() {
     HexToBytes(memo, memo_bytes.data());
     HexToBytes(id, id_bytes.data());
 
-    Phase1<18> phase_1(id_bytes.data(), 1);
+    Phase1<32> phase_1(id_bytes.data(), 48);
     return 0;
 }

@@ -12,8 +12,8 @@ class Phase1
 {
 public:
 
-    static constexpr uint8_t line_point_delta_len_bits = K + 2;
-    static constexpr uint8_t finaltable_y_delta_len_bits = 4;
+    static constexpr uint8_t line_point_delta_len_bits = K + 10;
+    static constexpr uint8_t finaltable_y_delta_len_bits = 10;
 
     std::vector<Buffer*> buffers;
     std::vector<std::vector<TemporaryPark<line_point_delta_len_bits>*>> graph_parks;

@@ -11,12 +11,14 @@ template <uint8_t delta_len>
 class TemporaryPark {
     uint128_t start_linepoint;
     uint8_t* data;
-    uint64_t entries_written;
     uint64_t num_entries;
     static constexpr uint64_t entry_len_bits = delta_len;
 
 public:
-    inline TemporaryPark(uint64_t num_entries_in) { num_entries = num_entries_in; }
+    inline TemporaryPark(uint64_t num_entries_in)
+    {
+        num_entries = num_entries_in;
+    }
     inline void Bind(uint8_t* buffer) { data = buffer; }
     inline uint64_t GetCount() { return num_entries; }
     inline uint64_t GetSpaceNeeded()
@@ -39,9 +41,11 @@ public:
         for (uint32_t i = 0; i < num_entries; i++)
         {
             // Only worry about not overwriting the previous entry
+            assert(prev_linepoint_written <= src[i]);
             uint128_t delta = src[i] - prev_linepoint_written;
+            prev_linepoint_written = src[i];
             assert(delta < (1ULL << entry_len_bits));
-            uint64_t bits_offset = entries_written*entry_len_bits;
+            uint64_t bits_offset = i*entry_len_bits;
             uint64_t bytes_offset = bits_offset / 8;
             bits_offset = bits_offset % 8;
             uint8_t mask = ~((1<<(8-bits_offset))-1);
