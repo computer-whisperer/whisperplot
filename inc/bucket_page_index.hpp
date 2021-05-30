@@ -6,6 +6,8 @@
 #include "calculate_bucket.hpp"
 #include "pos_constants.hpp"
 
+#include "bitpacker.hpp"
+
 template<uint8_t K, int8_t table_index> struct BucketPageIndexEntry_YCSizes {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K;
@@ -72,6 +74,17 @@ template<uint8_t K, int8_t table_index> struct YCBucketEntry
 
     inline void pack(uint8_t * dest)
     {
+        std::span<bitpacker::byte_type> s{dest, packed_entry_len_bytes};
+        if (trimmed_y_len_bits)
+        {
+            uint64_t y_trimmed = y % bucket_divisor;
+            bitpacker::insert(s, 0, trimmed_y_len_bits,  y_trimmed);
+        }
+        if (sizes.c_len_bits)
+        {
+            bitpacker::insert(s, trimmed_y_len_bits, sizes.c_len_bits,  c);
+        }
+        /*
         auto b = Bits();
         if (trimmed_y_len_bits) {
             uint64_t y_trimmed = y % bucket_divisor;
@@ -79,20 +92,33 @@ template<uint8_t K, int8_t table_index> struct YCBucketEntry
         }
         if (sizes.c_len_bits)
             b += Bits(c, sizes.c_len_bits);
-        b.ToBytes(dest);
+        b.ToBytes(dest);*/
+        //memcpy(dest, buff.data(), packed_entry_len_bytes);
     }
 
     inline void unpack(uint8_t * src, uint32_t bucket_id)
     {
+        std::span<bitpacker::byte_type> s{src, packed_entry_len_bytes};
+        if (trimmed_y_len_bits)
+        {
+            uint64_t y_trimmed = bitpacker::extract<uint64_t>(s, 0, trimmed_y_len_bits);
+            y = y_trimmed + bucket_id*bucket_divisor;
+        }
+        if (sizes.c_len_bits)
+        {
+            c = bitpacker::extract<uint128_t>(s, trimmed_y_len_bits, sizes.c_len_bits);
+        }
+    /*
         uint32_t bits_offset = 0;
         if (trimmed_y_len_bits)
         {
             uint64_t y_trimmed = Util::SliceInt64FromBytes(src, bits_offset, trimmed_y_len_bits);
-            y = y_trimmed + bucket_id*bucket_divisor;
+
         }
         bits_offset += trimmed_y_len_bits;
         if (sizes.c_len_bits)
             c = Util::SliceInt128FromBytes(src, bits_offset, sizes.c_len_bits);
+            */
     }
 };
 
@@ -117,18 +143,29 @@ template<uint8_t K> struct LinePointEntryUIDBucketEntry
 
     inline void pack(uint8_t * dest)
     {
+        std::span<bitpacker::byte_type> s{dest, packed_entry_len_bytes};
+        uint128_t linepoint_trimmed = line_point % bucket_divisor;
+        bitpacker::insert(s, 0, trimmed_line_point_len_bits,  linepoint_trimmed);
+        bitpacker::insert(s, trimmed_line_point_len_bits, entry_uid_len_bits,  entry_uid);
+        /*
         auto b = Bits();
         uint64_t linepoint_trimmed = line_point % bucket_divisor;
         b += Bits(linepoint_trimmed, trimmed_line_point_len_bits);
         b += Bits(entry_uid, entry_uid_len_bits);
-        b.ToBytes(dest);
+        b.ToBytes(dest);*/
     }
 
     inline void unpack(uint8_t * src, uint32_t bucket_id)
     {
-        uint64_t linepoint_trimmed = Util::SliceInt64FromBytes(src, 0, trimmed_line_point_len_bits);
-        line_point = linepoint_trimmed + bucket_id * bucket_divisor;
+        /*
+        uint64_t line_point_trimmed = Util::SliceInt64FromBytes(src, 0, trimmed_line_point_len_bits);
+        line_point = line_point_trimmed + bucket_id * bucket_divisor;
         entry_uid = Util::SliceInt64FromBytes(src, trimmed_line_point_len_bits, entry_uid_len_bits);
+         */
+        std::span<bitpacker::byte_type> s{src, packed_entry_len_bytes};
+        uint128_t line_point_trimmed = bitpacker::extract<uint128_t>(s, 0, trimmed_line_point_len_bits);
+        line_point = line_point_trimmed + bucket_id * bucket_divisor;
+        entry_uid = bitpacker::extract<uint64_t>(s, trimmed_line_point_len_bits, entry_uid_len_bits);
     }
 };
 
@@ -156,6 +193,7 @@ public:
     BucketPageIndex()
     {
         pages = (uint8_t*) mmap(nullptr, index_size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_SHARED, -1, 0);
+        madvise(pages, index_size, MADV_DONTDUMP);
 
         for (auto & it : bucket_entry_counts)
         {
@@ -171,7 +209,7 @@ public:
     {
         munmap(pages, index_size);
     }
-
+/*
     void SumBucketOffsets()
     {
         uint64_t ctr = 0;
@@ -186,7 +224,7 @@ public:
     {
         return bucket_offsets[bucket_id];
     }
-
+*/
     inline uint64_t InsertEntry(T entry)
     {
         uint64_t bucket_id = entry.get_bucket_id();
@@ -195,6 +233,9 @@ public:
         assert(bucket_id < T::num_buckets);
         uint8_t* dest = FindEntry(bucket_id, entry_id);
         entry.pack(dest);
+
+        assert(dest >= pages);
+        assert(dest < (pages + index_size));
         return entry_id;
     }
 
@@ -210,6 +251,9 @@ public:
         uint8_t* src = FindEntry(bucket_id, entry_id);
         T entry;
         entry.unpack(src, bucket_id);
+
+        assert(src >= pages);
+        assert(src < (pages + index_size));
         return entry;
     }
     inline void PopBucket(uint64_t bucket_id)

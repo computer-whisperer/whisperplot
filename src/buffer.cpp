@@ -94,8 +94,9 @@ Buffer::~Buffer()
 
 void Buffer::Truncate(uint64_t new_size)
 {
-    if (!is_file_backed)
+    if (!is_file_backed) {
         return;
+    }
 	SwapOutAsync();
 	WaitForSwapOut();
 	data_len = new_size;
@@ -117,8 +118,9 @@ void Buffer::SwapOut()
 
 void Buffer::SwapOutAsync()
 {
-    if (!is_file_backed)
+    if (!is_file_backed){
         return;
+    }
 	if (is_swapping && swapinthread.joinable())
 		swapinthread.join();
 	if (!is_swapping && !is_swapped)
@@ -135,6 +137,7 @@ void Buffer::SwapIn(bool shared)
         flags = MAP_ANONYMOUS|MAP_SHARED;
     }
     data = (uint8_t *) mmap(NULL, data_len, PROT_READ|PROT_WRITE, flags, fd, 0);
+    madvise(data, data_len, MADV_DONTDUMP);
     assert(data != MAP_FAILED);
     is_swapped = false;
     is_swapping = false;
@@ -142,12 +145,15 @@ void Buffer::SwapIn(bool shared)
 
 void Buffer::SwapInAsync(bool shared)
 {
-    if (!is_file_backed)
+    if (!is_file_backed) {
         return;
-	if (is_swapping && swapoutthread.joinable())
-		swapoutthread.join();
-	if (!is_swapping && is_swapped)
-		swapinthread = thread(&Buffer::SwapIn, this, shared);
+    }
+	if (is_swapping && swapoutthread.joinable()){
+        swapoutthread.join();
+	}
+	if (!is_swapping && is_swapped) {
+        swapinthread = thread(&Buffer::SwapIn, this, shared);
+    }
 }
 
 void Buffer::WaitForSwapIn()

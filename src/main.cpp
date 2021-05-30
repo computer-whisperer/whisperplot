@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include "phase1.hpp"
+#include "cxxopts.hpp"
 
 using namespace std;
 
@@ -21,23 +22,74 @@ string Strip0x(const string &hex)
     return hex;
 }
 
-int main() {
-    std::cout << "WhisperPlot!" << std::endl;
+using namespace std;
+
+int main(int argc, char *argv[]) {
+    std::cout.setf( std::ios_base::unitbuf );
+    cxxopts::Options options(
+        "whisperplot", "A better plotter!");
+
+    // Default values
+    uint8_t k = 22;
+    uint8_t num_threads = 1;
+    string filename = "plot.dat";
+    string tempdir = ".";
+    string finaldir = ".";
+    string operation = "help";
+    string memo = "0102030405";
     string id = "022fb42c08c12de3a6af053880199806532e79515f94e83461612101f9412f9e";
+
+    options.allow_unrecognised_options().add_options()(
+            "k, size", "Plot size", cxxopts::value<uint8_t>(k))(
+            "r, threads", "Number of threads", cxxopts::value<uint8_t>(num_threads))(
+            "t, tempdir", "Temporary directory", cxxopts::value<string>(tempdir))(
+            "d, finaldir", "Final directory", cxxopts::value<string>(finaldir))(
+            "f, file", "Filename", cxxopts::value<string>(filename))(
+            "m, memo", "Memo to insert into the plot", cxxopts::value<string>(memo))(
+            "i, id", "Unique 32-byte seed for the plot", cxxopts::value<string>(id))(
+            "help", "Print help");
+    auto result = options.parse(argc, argv);
+
+    cout << "WhisperPlot!" << endl;
+    cout << " k = " << static_cast<int>(k) << endl;
+    cout << " filename = " << filename << endl;
+    cout << " id = " << id << endl;
+    cout << " threads = "<< static_cast<int>(num_threads) << endl;
+
     id = Strip0x(id);
     if (id.size() != 64) {
         cout << "Invalid ID, should be 32 bytes (hex)" << endl;
         exit(1);
     }
-
-    string memo = "MEMO";
-
+    memo = Strip0x(memo);
+    if (memo.size() % 2 != 0) {
+        cout << "Invalid memo, should be only whole bytes (hex)" << endl;
+        exit(1);
+    }
     std::vector<uint8_t> memo_bytes(memo.size() / 2);
     std::array<uint8_t, 32> id_bytes;
 
     HexToBytes(memo, memo_bytes.data());
     HexToBytes(id, id_bytes.data());
 
-    Phase1<32> phase_1(id_bytes.data(), 48);
+    if (k == 18) {
+        auto res = new Phase1<18>(id_bytes.data(), num_threads);
+        cout << res->final_parks.size() << endl;
+    }
+    else if (k == 22) {
+        auto res = new Phase1<22>(id_bytes.data(), num_threads);
+        cout << res->final_parks.size() << endl;
+    }
+    else if (k == 32) {
+        auto res = new Phase1<32>(id_bytes.data(), num_threads);
+        cout << res->final_parks.size() << endl;
+    }
+    else if (k == 33){
+        auto res = new Phase1<33>(id_bytes.data(), num_threads);
+        cout << res->final_parks.size() << endl;
+    }
+
+
+
     return 0;
 }
