@@ -47,6 +47,7 @@ void load_tables()
             }
         }
     }
+    table_initialized = true;
 }
 
 // Class to evaluate F1

@@ -2,6 +2,7 @@
 #include <string>
 #include "phase1.hpp"
 #include "cxxopts.hpp"
+#include "thread_mgr.hpp"
 
 using namespace std;
 
@@ -50,11 +51,18 @@ int main(int argc, char *argv[]) {
             "help", "Print help");
     auto result = options.parse(argc, argv);
 
+    std::vector<uint32_t> cpu_ids;
+    for (uint32_t cpuid = 0; cpuid < num_threads; cpuid++)
+    {
+        cpu_ids.push_back(cpuid);
+    }
+
     cout << "WhisperPlot!" << endl;
     cout << " k = " << static_cast<int>(k) << endl;
     cout << " filename = " << filename << endl;
     cout << " id = " << id << endl;
     cout << " threads = "<< static_cast<int>(num_threads) << endl;
+    cout << " numa nodes = "<< static_cast<int>(GetNUMANodesFromCpuIds(cpu_ids).size()) << endl;
 
     id = Strip0x(id);
     if (id.size() != 64) {
@@ -72,20 +80,26 @@ int main(int argc, char *argv[]) {
     HexToBytes(memo, memo_bytes.data());
     HexToBytes(id, id_bytes.data());
 
+
+
     if (k == 18) {
-        auto res = new Phase1<18>(id_bytes.data(), num_threads);
+        auto res = new Phase1<18>(id_bytes.data(), cpu_ids);
         cout << res->final_parks.size() << endl;
     }
     else if (k == 22) {
-        auto res = new Phase1<22>(id_bytes.data(), num_threads);
+        auto res = new Phase1<22>(id_bytes.data(), cpu_ids);
+        cout << res->final_parks.size() << endl;
+    }
+    else if (k == 26) {
+        auto res = new Phase1<26>(id_bytes.data(), cpu_ids);
         cout << res->final_parks.size() << endl;
     }
     else if (k == 32) {
-        auto res = new Phase1<32>(id_bytes.data(), num_threads);
+        auto res = new Phase1<32>(id_bytes.data(), cpu_ids);
         cout << res->final_parks.size() << endl;
     }
     else if (k == 33){
-        auto res = new Phase1<33>(id_bytes.data(), num_threads);
+        auto res = new Phase1<33>(id_bytes.data(), cpu_ids);
         cout << res->final_parks.size() << endl;
     }
 
