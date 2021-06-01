@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
-#include "phase1.hpp"
+#include <filesystem>
+#include "plotter.hpp"
 #include "cxxopts.hpp"
 #include "thread_mgr.hpp"
 
@@ -25,6 +26,18 @@ string Strip0x(const string &hex)
 
 using namespace std;
 
+template<uint8_t K>
+void doPlot(const uint8_t* id_in, const uint8_t* memo_in, const uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
+{
+    auto res = new Plotter<K>(id_in, memo_in, memo_size_in, cpu_ids, filename);
+    res->phase1();
+    res->check();
+    res->phase2();
+    res->phase3();
+    res->phase4();
+    cout << res->final_parks.size() << endl;
+}
+
 int main(int argc, char *argv[]) {
     std::cout.setf( std::ios_base::unitbuf );
     cxxopts::Options options(
@@ -36,7 +49,6 @@ int main(int argc, char *argv[]) {
     string filename = "plot.dat";
     string tempdir = ".";
     string finaldir = ".";
-    string operation = "help";
     string memo = "0102030405";
     string id = "022fb42c08c12de3a6af053880199806532e79515f94e83461612101f9412f9e";
 
@@ -80,30 +92,33 @@ int main(int argc, char *argv[]) {
     HexToBytes(memo, memo_bytes.data());
     HexToBytes(id, id_bytes.data());
 
+    string final_filename = filesystem::path(finaldir) / filesystem::path(filename);
+
+    switch (k)
+    {
+        case 18:
+            doPlot<18>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+            break;
+        case 22:
+            doPlot<22>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+            break;
+        case 26:
+            doPlot<26>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+            break;
+        case 32:
+            doPlot<32>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+            break;
+        case 33:
+            doPlot<33>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+            break;
+        default:
+            cout << "Unsupported k selected, please choose from 18, 22, 26, 32, or 33." << endl;
+    }
 
 
-    if (k == 18) {
-        auto res = new Phase1<18>(id_bytes.data(), cpu_ids);
-        cout << res->final_parks.size() << endl;
-    }
-    else if (k == 22) {
-        auto res = new Phase1<22>(id_bytes.data(), cpu_ids);
-        cout << res->final_parks.size() << endl;
-    }
-    else if (k == 26) {
-        auto res = new Phase1<26>(id_bytes.data(), cpu_ids);
-        cout << res->final_parks.size() << endl;
-    }
-    else if (k == 32) {
-        auto res = new Phase1<32>(id_bytes.data(), cpu_ids);
-        cout << res->final_parks.size() << endl;
-    }
-    else if (k == 33){
-        auto res = new Phase1<33>(id_bytes.data(), cpu_ids);
-        cout << res->final_parks.size() << endl;
-    }
 
 
 
     return 0;
 }
+

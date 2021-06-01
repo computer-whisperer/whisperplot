@@ -137,7 +137,10 @@ void Buffer::SwapIn(bool shared)
         flags = MAP_ANONYMOUS|MAP_SHARED;
     }
     data = (uint8_t *) mmap(NULL, data_len, PROT_READ|PROT_WRITE, flags, fd, 0);
-    madvise(data, data_len, MADV_DONTDUMP);
+    if (!is_file_backed)
+    {
+        madvise(data, data_len, MADV_DONTDUMP);
+    }
     assert(data != MAP_FAILED);
     is_swapped = false;
     is_swapping = false;

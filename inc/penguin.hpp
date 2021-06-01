@@ -12,37 +12,37 @@
 template<uint8_t K, int8_t table_index> struct BucketPageIndexEntry_YCSizes {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 0> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*2;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 1> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*4;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 2> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*4;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 3> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*3;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 4> {
     static constexpr uint32_t y_len_bits = K+kExtraBits;
     static constexpr uint32_t c_len_bits = K*2;
-    static constexpr uint32_t num_entries_per_bc_bucket = 300;
+    static constexpr uint32_t num_entries_per_bc_bucket = 320;
 };
 
 template<uint8_t K> struct BucketPageIndexEntry_YCSizes<K, 5> {
@@ -61,6 +61,37 @@ constexpr unsigned ceillog2(unsigned x)
     return x == 1 ? 0 : floorlog2(x - 1) + 1;
 }
 
+template<class T, uint64_t len_bits_in> struct SimplePackedEntry
+{
+    T value;
+
+    static constexpr uint64_t len_bits = len_bits_in;
+
+    inline explicit SimplePackedEntry()
+    {
+
+    }
+
+    inline explicit SimplePackedEntry(T value_in)
+    {
+        value = value_in;
+    }
+
+    template <class T1>
+    inline void pack(T1 * dest, uint64_t offset)
+    {
+        std::span<T1> s{dest, (offset + len_bits + 7)/8};
+        bitpacker::insert(s, offset, len_bits,  value);
+    }
+
+    template <class T1>
+    inline void unpack(T1 * src, uint64_t offset)
+    {
+        std::span<T1> s{src, (offset + len_bits + 7)/8};
+        value = bitpacker::extract<T>(s, offset, len_bits);
+    }
+};
+
 template<uint8_t K, int8_t table_index> struct YCPackedEntry
 {
     uint64_t y_offset;
@@ -68,10 +99,11 @@ template<uint8_t K, int8_t table_index> struct YCPackedEntry
     uint128_t c;
 
     static struct BucketPageIndexEntry_YCSizes<K, table_index> sizes;
-    static constexpr uint64_t num_bc_buckets_per_sort_row = 32;
+    static constexpr uint64_t num_bc_buckets_per_sort_row = 1024;
     static constexpr uint64_t sort_row_divisor = kBC * num_bc_buckets_per_sort_row;
     static constexpr uint64_t num_sort_rows = (1ULL << sizes.y_len_bits) / sort_row_divisor + 1;
     static constexpr uint64_t max_entries_per_sort_row = sizes.num_entries_per_bc_bucket * num_bc_buckets_per_sort_row;
+    static constexpr uint64_t max_entries = max_entries_per_sort_row*num_sort_rows;
     static constexpr uint64_t trimmed_y_len_bits = sizes.y_len_bits - floorlog2(num_sort_rows);
     static constexpr uint64_t len_bits = trimmed_y_len_bits + sizes.c_len_bits;
 
@@ -127,6 +159,7 @@ template<uint8_t K> struct LinePointEntryUIDPackedEntry
     static constexpr uint64_t sort_row_divisor = (1ULL << (linepoint_len_bits - 13));
     static constexpr uint64_t num_sort_rows = (1ULL << 13) + 1;
     static constexpr uint64_t max_entries_per_sort_row = ((1ULL << (K + 2)) / num_sort_rows) * 1.2;
+    static constexpr uint64_t max_entries = max_entries_per_sort_row*num_sort_rows;
     static constexpr uint64_t trimmed_line_point_len_bits = linepoint_len_bits - floorlog2(num_sort_rows);
     static constexpr uint64_t len_bits = trimmed_line_point_len_bits + entry_uid_len_bits;
 
@@ -135,10 +168,10 @@ template<uint8_t K> struct LinePointEntryUIDPackedEntry
         return line_point_offset + sort_row * sort_row_divisor;
     }
 
-    inline void setLinePoint(uint128_t y)
+    inline void setLinePoint(uint128_t line_point)
     {
-        sort_row = y / sort_row_divisor;
-        line_point_offset = y % sort_row_divisor;
+        sort_row = line_point / sort_row_divisor;
+        line_point_offset = line_point % sort_row_divisor;
     }
 
     template <class T>
@@ -159,17 +192,33 @@ template<uint8_t K> struct LinePointEntryUIDPackedEntry
 };
 
 // Setting the backing store to zero is a sufficient initializer
-template <class E, class T, uint32_t reserved_count>
+template <class E, class E2, class T, uint32_t reserved_count>
 struct BasePackedArray
 {
     static constexpr uint64_t reserved_len_bits = T::len_bits*reserved_count;
     static constexpr uint64_t reserved_len_bytes = (reserved_len_bits + 7) / 8;
-    uint64_t count;
+    E2 count;
     E data[reserved_len_bytes];
+
+    inline explicit BasePackedArray()= default;
+
+    inline uint64_t size()
+    {
+        return count;
+    }
 
     inline void clear()
     {
         count = 0;
+    }
+
+    inline void fill(T value)
+    {
+        count = reserved_count;
+        for (uint64_t i = 0; i < reserved_count; i++)
+        {
+            value.pack(data, i*T::len_bits);
+        }
     }
 
     inline uint64_t append(T value)
@@ -181,6 +230,17 @@ struct BasePackedArray
         return index;
     }
 
+    inline void set(uint64_t index, T value)
+    {
+        assert(index < reserved_count);
+        if (count < index)
+        {
+            count = index+1;
+        }
+        value.pack(data, index*T::len_bits);
+    }
+
+
     inline T read(uint64_t i)
     {
         T value;
@@ -190,11 +250,13 @@ struct BasePackedArray
     }
 };
 
-template<class T, uint32_t reserved_count>
-using AtomicPackedArray = BasePackedArray<std::atomic<uint8_t>, T, reserved_count>;
+using BooleanPackedEntry = SimplePackedEntry<uint8_t, 1>;
 
 template<class T, uint32_t reserved_count>
-using PackedArray = BasePackedArray<uint8_t, T, reserved_count>;
+using AtomicPackedArray = BasePackedArray<std::atomic<uint8_t>, std::atomic<uint64_t>, T, reserved_count>;
+
+template<class T, uint32_t reserved_count>
+using PackedArray = BasePackedArray<uint8_t, uint64_t, T, reserved_count>;
 
 template <class T> class Penguin
 {
@@ -206,7 +268,7 @@ template <class T> class Penguin
     Row * rows;
 
 public:
-    uint8_t pops_required_per_row = 1;
+    uint64_t pops_required_per_row = 1;
     inline Penguin()
     {
         rows = (Row*) mmap(nullptr, sizeof(Row)*row_count, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_SHARED, -1, 0);
@@ -256,6 +318,7 @@ public:
     {
         return bucket_id + entry_id*T::num_sort_rows;
     }
+
 };
 
 

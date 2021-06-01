@@ -48,7 +48,7 @@ set(FSE_FILES
         ${FSE_LIB}/fse_decompress.c
         ${FSE_LIB}/entropy_common.c
         ${FSE_LIB}/hist.c
-        inc/thread_mgr.hpp)
+        inc/thread_mgr.hpp inc/explicit_templates.hpp)
 add_library(fse ${FSE_FILES})
 
 set(BLAKE3_SRC
@@ -65,6 +65,9 @@ include_directories(inc chiapos_inc ${cxxopts_SOURCE_DIR}/include ${bitpacker_SO
 add_executable(whisperplot
         src/main.cpp
         src/phase1.cpp
+        src/phase2.cpp
+        src/phase3.cpp
+        src/phase4.cpp
         src/buffer.cpp
         src/calculate_bucket.cpp
         chiapos_inc/chacha8.c

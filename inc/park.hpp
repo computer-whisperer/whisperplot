@@ -15,12 +15,13 @@ class TemporaryPark {
     static constexpr uint64_t entry_len_bits = delta_len;
 
 public:
+    uint64_t start_pos;
     inline TemporaryPark(uint64_t num_entries_in)
     {
         num_entries = num_entries_in;
     }
-    inline void Bind(uint8_t* buffer) { data = buffer; }
-    inline uint64_t GetCount() { return num_entries; }
+    inline void bind(uint8_t* buffer) { data = buffer; }
+    inline uint64_t size() { return num_entries; }
     inline uint64_t GetSpaceNeeded()
     {
         uint128_t bits_needed = entry_len_bits * num_entries;
@@ -33,7 +34,7 @@ public:
         return (((uint128_t)bswap_64(parts[0]))<<64) | bswap_64(parts[1]);
     }
 
-    inline void AddEntries(uint128_t* src)
+    inline void addEntries(uint128_t* src)
     {
         start_linepoint = src[0];
         uint128_t prev_linepoint_written = src[0];
@@ -57,7 +58,7 @@ public:
              */
         }
     }
-    inline void ReadEntries(uint128_t* dest)
+    inline void readEntries(uint128_t* dest)
     {
         std::span<bitpacker::byte_type> src{data, GetSpaceNeeded()};
         uint128_t last_linepoint = start_linepoint;

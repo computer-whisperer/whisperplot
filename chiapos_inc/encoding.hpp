@@ -178,7 +178,7 @@ public:
         return ans;
     }
 
-    static size_t ANSEncodeDeltas(std::vector<unsigned char> deltas, double R, uint8_t *out)
+    static size_t ANSEncodeDeltas(std::vector<unsigned char> deltas, uint32_t num_deltas, double R, uint8_t *out)
     {
         if (!tmCache.CTExists(R)) {
             std::vector<short> nCount = Encoding::CreateNormalizedCount(R);
@@ -197,7 +197,7 @@ public:
 
         FSE_CTable *ct = tmCache.CTGet(R);
         return FSE_compress_usingCTable(
-            out, deltas.size() * 8, static_cast<void *>(deltas.data()), deltas.size(), ct);
+            out, num_deltas * 8, static_cast<void *>(deltas.data()), num_deltas, ct);
     }
 
     static void ANSFree(double R)
