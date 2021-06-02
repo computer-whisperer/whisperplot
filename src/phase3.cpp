@@ -17,7 +17,7 @@ template <int8_t table_index>
 void Plotter<K>::phase3ThreadA(
         uint32_t cpu_id,
         atomic<uint64_t>* coordinator,
-        vector<TemporaryPark<line_point_delta_len_bits>*>* temporary_parks,
+        vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
         AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* entries_used,
         AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>* final_positions,
         Buffer* output_buffer)
@@ -25,8 +25,7 @@ void Plotter<K>::phase3ThreadA(
     PinToCpuid(cpu_id);
     vector<uint128_t> temporary_park_line_points(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
     vector<uint128_t> park_line_points(kEntriesPerPark);
-    vector<uint64_t> park_stubs(kEntriesPerPark);
-    vector<uint8_t> park_deltas(kEntriesPerPark);
+    vector<uint128_t> park_line_points_check(kEntriesPerPark);
 	while (true)
 	{
 		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
@@ -43,8 +42,11 @@ void Plotter<K>::phase3ThreadA(
 		{
 			if (temporary_parks->at(temporary_park_id)->start_pos + temporary_parks->at(temporary_park_id)->size() > park_starting_pos)
 			{
-                temporary_parks->at(temporary_park_id)->readEntries(temporary_park_line_points.data());
-				for (uint64_t i = 0; i < temporary_parks->at(temporary_park_id)->size(); i++)
+
+                temporary_parks->at(temporary_park_id)->readEntries(temporary_park_line_points);
+                uint128_t prev_new_line_point = 0;
+                uint128_t prev_old_line_point = 0;
+                for (uint64_t i = 0; i < temporary_parks->at(temporary_park_id)->size(); i++)
 				{
 				    uint64_t pos = temporary_parks->at(temporary_park_id)->start_pos+i;
 				    if (pos < park_starting_pos)
@@ -55,15 +57,22 @@ void Plotter<K>::phase3ThreadA(
                     {
 
 				        uint128_t line_point = temporary_park_line_points[i];
+
 				        if (table_index > 0)
                         {
                             // Re-encode line point to compensate for dropped entries in previous table
                             auto res = Encoding::LinePointToSquare(line_point);
                             uint64_t x_new = final_positions->read(res.first).value;
                             uint64_t y_new = final_positions->read(res.second).value;
+                            assert(x_new <= res.first);
+                            assert(y_new <= res.second);
                             line_point = Encoding::SquareToLinePoint(x_new, y_new);
+                            assert(temporary_park_line_points[i]>=prev_old_line_point);
+                            assert(line_point>=prev_new_line_point);
                         }
                         park_line_points[park_entry_i++] = line_point;
+                        prev_old_line_point = temporary_park_line_points[i];
+                        prev_new_line_point = line_point;
                     }
 					if (park_entry_i == kEntriesPerPark)
 					{
@@ -83,66 +92,23 @@ void Plotter<K>::phase3ThreadA(
 			break;
 		}
 
-        // Since we have approx 2^k line_points between 0 and 2^2k, the average
-        // space between them when sorted, is k bits. Much more efficient than storing each
-        // line point. This is divided into the stub and delta. The stub is the least
-        // significant (k-kMinusStubs) bits, and largely random/incompressible. The small
-        // delta is the rest, which can be efficiently encoded since it's usually very
-        // small.
+		Park* p;
+		if (table_index ==  0) {
+            p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDeltaTable1, kRValues[table_index]>(kEntriesPerPark);
+        }
+		else {
+            p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDelta, kRValues[table_index]>(kEntriesPerPark);
+        }
+        p->bind(output_buffer->data + *(output_buffer->insert_pos) + park_id * park_size_bytes);
+		p->addEntries(park_line_points);
+		p->readEntries(park_line_points_check);
 
-		for (uint32_t i = 1; i < park_entry_i; i++)
-		{
-			uint128_t big_delta = park_line_points[i] - park_line_points[i-1];
-            uint64_t stub = big_delta & ((1ULL << (K - kStubMinusBits)) - 1);
-            uint64_t small_delta = big_delta >> (K - kStubMinusBits);
-            assert(small_delta < 256);
-            park_deltas[i-1] = small_delta;
-            park_deltas[i-1] = stub;
-		}
-
-	    // Parks are fixed size, so we know where to start writing. The deltas will not go over
-	    // into the next park.
-		uint8_t * park_start = output_buffer->data + *(output_buffer->insert_pos) + park_id * park_size_bytes;
-	    uint8_t * dest = park_start;
-
-	    // First entry is static
-        uint128_t first_line_point = park_line_points[0] << (128 - 2 * K);
-        Util::IntTo16Bytes(dest, first_line_point);
-        dest += EntrySizes::CalculateLinePointSize(K);
-
-	    // We use ParkBits instead of Bits since it allows storing more data
-	    ParkBits park_stubs_bits;
-        for (uint32_t i = 0; i < park_entry_i-1; i++)
+		for (uint64_t i = 0; i < kEntriesPerPark; i++)
         {
-	        park_stubs_bits.AppendValue(park_stubs[i], (K - kStubMinusBits));
-	    }
-	    uint32_t stubs_size = EntrySizes::CalculateStubsSize(K);
-	    uint32_t stubs_valid_size = cdiv(park_stubs_bits.GetSize(), 8);
-	    park_stubs_bits.ToBytes(dest);
-	    memset(dest + stubs_valid_size, 0, stubs_size - stubs_valid_size);
-	    dest += stubs_size;
+		    assert(park_line_points[i] == park_line_points_check[i]);
+        }
 
-	    // The stubs are random so they don't need encoding. But deltas are more likely to
-	    // be small, so we can compress them
-	    double R = kRValues[table_index];
-	    uint8_t *deltas_start = dest + 2;
-	    size_t deltas_size = Encoding::ANSEncodeDeltas(park_deltas, park_entry_i-1, R, deltas_start);
-
-	    if (!deltas_size) {
-	        // Uncompressed
-	        deltas_size = park_entry_i-1;
-	        Util::IntToTwoBytesLE(dest, deltas_size | 0x8000);
-	        memcpy(deltas_start, park_deltas.data(), deltas_size);
-	    } else {
-	        // Compressed
-	        Util::IntToTwoBytesLE(dest, deltas_size);
-	    }
-
-	    dest += 2 + deltas_size;
-
-        memset(dest, 0x00, park_size_bytes - (dest - park_start));
-
-	    assert(park_size_bytes > (uint64_t)(dest - park_start));
+		delete p;
 	}
 }
 
@@ -165,7 +131,7 @@ void Plotter<K>::phase3DoTable()
                 &coordinator,
                 &(graph_parks[table_index]),
                 &(entries_used[table_index]),
-                &(final_positions[table_index+1]),
+                &(final_positions[table_index-1]),
                 output_buffer));
     }
 
@@ -178,7 +144,7 @@ void Plotter<K>::phase3DoTable()
 
     // setup output_table_offset for next iteration
     uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
-    uint64_t num_entries = (graph_parks.end()-1)->start_pos + (graph_parks.end()-1)->size();
+    uint64_t num_entries = (*(graph_parks[table_index].end()-1))->start_pos + (*(graph_parks[table_index].end()-1))->size();
     uint64_t parks_needed = (num_entries+kEntriesPerPark-1)/kEntriesPerPark;
     output_buffer->GetInsertionOffset(parks_needed*park_size_bytes);
 
@@ -188,22 +154,24 @@ void Plotter<K>::phase3DoTable()
 template<uint8_t K>
 void Plotter<K>::phase3()
 {
+    uint64_t phase_start_seconds = time(nullptr);
 	// Try to predict an upper bound to the final file size
 	uint64_t predicted_file_size_bytes = 128;// header
 	for (uint8_t table_index = 0; table_index < 6; table_index++)
 	{
 		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
-		auto final_park = (graph_parks[table_index]->end()-1);
-		uint64_t num_parks = (final_park->start_pos + final_park->size())/kEntriesPerPark;
+		auto final_park = *(graph_parks[table_index].end()-1);
+		uint64_t num_parks = (final_park->start_pos + final_park->size() + kEntriesPerPark-1)/kEntriesPerPark;
 		predicted_file_size_bytes += park_size_bytes*num_parks;
 	}
 
-    uint64_t total_C1_entries = cdiv(((final_parks.end()-1)->start_pos + (final_parks.end()-1)->size()), kCheckpoint1Interval);
+    uint64_t total_C1_entries = cdiv(((*(final_parks.end()-1))->start_pos + (*(final_parks.end()-1))->size()), kCheckpoint1Interval);
     uint64_t total_C2_entries = cdiv(total_C1_entries, kCheckpoint2Interval);
     uint32_t size_C3 = EntrySizes::CalculateC3Size(K);
     predicted_file_size_bytes += (total_C1_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C2_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C1_entries)*size_C3;
 
-    output_buffer = new Buffer(predicted_file_size_bytes*1.2, filename);
+    //output_buffer = new Buffer(predicted_file_size_bytes*1.5, filename);
+    output_buffer = new Buffer(predicted_file_size_bytes*1.5);
 
     // 19 bytes  - "Proof of Space Plot" (utf-8)
     // 32 bytes  - unique plot id
@@ -233,4 +201,8 @@ void Plotter<K>::phase3()
     phase3DoTable<4>();
     phase3DoTable<5>();
 	final_table_begin_pointers[6] = bswap_64(*(output_buffer->insert_pos));
+
+    cout << "Phase 3 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 }
+
+#include "explicit_templates.hpp"

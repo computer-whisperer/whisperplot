@@ -88,7 +88,7 @@ private:
     std::map<double, FSE_DTable *> DT_MEMO;
 };
 
-TMemoCache tmCache;
+extern TMemoCache tmCache;
 
 class Encoding {
 public:

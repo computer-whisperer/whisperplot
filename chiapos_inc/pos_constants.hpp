@@ -61,8 +61,8 @@ const uint32_t kBatchSizes = 8;
 const uint32_t kEntriesPerPark = 2048;
 
 // To store deltas for EPP entries, the average delta must be less than this number of bits
-const double kMaxAverageDeltaTable1 = 5.6;
-const double kMaxAverageDelta = 3.5;
+constexpr double kMaxAverageDeltaTable1 = 5.6;
+constexpr double kMaxAverageDelta = 3.5;
 
 // C3 entries contain deltas for f7 values, the max average size is the following
 const double kC3BitsPerEntry = 2.4;
@@ -73,7 +73,7 @@ const uint8_t kStubMinusBits = 3;
 // The ANS encoding R values for the 7 final plot tables
 // Tweaking the R values might allow lowering of the max average deltas, and reducing final
 // plot size
-const double kRValues[7] = {4.7, 2.75, 2.75, 2.7, 2.6, 2.45};
+constexpr double kRValues[7] = {4.7, 2.75, 2.75, 2.7, 2.6, 2.45};
 
 // The ANS encoding R value for the C3 checkpoint table
 const double kC3R = 1.0;

@@ -18,7 +18,7 @@ template <int8_t table_index>
 void Plotter<K>::phase2ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
-        vector<TemporaryPark<line_point_delta_len_bits>*>* parks,
+        vector<DeltaPark<line_point_delta_len_bits>*>* parks,
         AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used,
         AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used
         )
@@ -34,7 +34,7 @@ void Plotter<K>::phase2ThreadA(
         }
 
 		vector<uint128_t> line_points(parks->at(park_id)->size());
-		parks->at(park_id)->readEntries(line_points.data());
+		parks->at(park_id)->readEntries(line_points);
 
 		for (uint64_t i = 0; i < line_points.size(); i++)
         {
@@ -67,7 +67,7 @@ template <uint8_t K>
 template <int8_t table_index>
 void Plotter<K>::phase2DoTable()
 {
-    entries_used[5].fill(BooleanPackedEntry(false));
+    entries_used[table_index-1].fill(BooleanPackedEntry(false));
     cout << "Part A"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
     vector<thread> threads;
@@ -80,7 +80,7 @@ void Plotter<K>::phase2DoTable()
                 &coordinator,
                 &(graph_parks[table_index]),
                 &(entries_used[table_index]),
-                &(entries_used[table_index+1])));
+                &(entries_used[table_index-1])));
     }
 
     for (auto &it: threads)
@@ -90,10 +90,10 @@ void Plotter<K>::phase2DoTable()
     cout << " (" << time(nullptr) - start_seconds << "s)" << endl;
 
     // Start final position sum thread
-    phase2b_threads[table_index] = thread(
+    phase2b_threads[table_index-1] = thread(
             Plotter<K>::phase2ThreadB,
-            &(entries_used[table_index]),
-            &(final_positions[table_index]));
+            &(entries_used[table_index-1]),
+            &(final_positions[table_index-1]));
 }
 
 
@@ -108,11 +108,11 @@ void Plotter<K>::phase2()
             &(entries_used[5]),
             &(final_positions[5]));
     uint64_t phase_start_seconds = time(nullptr);
+    phase2DoTable<5>();
     phase2DoTable<4>();
     phase2DoTable<3>();
     phase2DoTable<2>();
     phase2DoTable<1>();
-    phase2DoTable<0>();
     cout << "Phase 2 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 }
 

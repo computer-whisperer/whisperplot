@@ -10,8 +10,9 @@ using namespace std;
 template <uint8_t K>
 void Plotter<K>::phase4()
 {
+    uint64_t phase_start_seconds = time(nullptr);
     uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;
-    uint64_t num_entries = (final_parks.end()-1)->start_pos + (final_parks.end()-1)->size();
+    uint64_t num_entries = (*(final_parks.end()-1))->start_pos + (*(final_parks.end()-1))->size();
     uint64_t number_of_p7_parks = (num_entries + kEntriesPerPark-1)/kEntriesPerPark;
 
     uint64_t begin_byte_C1 = bswap_64(final_table_begin_pointers[6]) + number_of_p7_parks * P7_park_size;
@@ -59,7 +60,7 @@ void Plotter<K>::phase4()
     for (auto & park : final_parks)
     {
         line_points.resize(park->size());
-        park->readEntries(line_points.data());
+        park->readEntries(line_points);
 
         for (auto & line_point: line_points)
         {
@@ -187,4 +188,8 @@ void Plotter<K>::phase4()
 
     output_buffer->Truncate(end_byte);
     delete output_buffer;
+
+    cout << "Phase 4 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 }
+
+#include "explicit_templates.hpp"

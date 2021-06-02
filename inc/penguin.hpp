@@ -200,7 +200,15 @@ struct BasePackedArray
     E2 count;
     E data[reserved_len_bytes];
 
-    inline explicit BasePackedArray()= default;
+    BasePackedArray()= default;
+    BasePackedArray(const BasePackedArray &a)
+    {
+        count = (uint64_t)a.count;
+        for (uint32_t i = 0; i < (T::len_bits*count+7)/8; i++)
+        {
+            data[i] = (uint8_t)a.data[i];
+        }
+    }
 
     inline uint64_t size()
     {

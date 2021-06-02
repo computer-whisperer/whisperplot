@@ -14,13 +14,13 @@ public:
 
     static constexpr uint8_t line_point_delta_len_bits = K + 10;
     static constexpr uint8_t finaltable_y_delta_len_bits = K + 10;
-    static constexpr uint64_t max_entries_per_graph_table = K*1.1;
+    static constexpr uint64_t max_entries_per_graph_table = (1ULL << K)*1.1;
 
 
 
     std::vector<Buffer*> buffers;
-    std::vector<std::vector<TemporaryPark<line_point_delta_len_bits>*>> graph_parks;
-    std::vector<TemporaryPark<finaltable_y_delta_len_bits>*> final_parks;
+    std::vector<std::vector<DeltaPark<line_point_delta_len_bits>*>> graph_parks;
+    std::vector<DeltaPark<finaltable_y_delta_len_bits>*> final_parks;
     std::string filename;
 
     inline Plotter(const uint8_t* id_in, const uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids_in, std::string filename_in)
@@ -73,7 +73,7 @@ private:
             std::atomic<uint64_t>* coordinator,
             std::map<uint32_t, std::vector<uint32_t>> * new_entry_positions,
             std::map<uint32_t, Penguin<LinePointEntryUIDPackedEntry<K>>*> line_point_bucket_index,
-            std::vector<TemporaryPark<line_point_delta_len_bits> *> *parks,
+            std::vector<DeltaPark<line_point_delta_len_bits> *> *parks,
             Buffer* buffer
     );
 
@@ -82,7 +82,7 @@ private:
             std::atomic<uint64_t>* coordinator,
             std::map<uint32_t, std::vector<uint32_t>> * new_entry_positions,
             std::map<uint32_t, Penguin<YCPackedEntry<K, 5>>*> line_point_bucket_indexes,
-            std::vector<TemporaryPark<finaltable_y_delta_len_bits> *> *parks,
+            std::vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
             Buffer* buffer,
             AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used
     );
@@ -95,7 +95,7 @@ private:
     static void phase2ThreadA(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::vector<TemporaryPark<line_point_delta_len_bits>*>* parks,
+            std::vector<DeltaPark<line_point_delta_len_bits>*>* parks,
             AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used,
             AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used
     );
@@ -111,7 +111,7 @@ private:
     static void phase3ThreadA(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::vector<TemporaryPark<line_point_delta_len_bits>*>* temporary_parks,
+            std::vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
             AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* entries_used,
             AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>* final_positions,
             Buffer* output_buffer);

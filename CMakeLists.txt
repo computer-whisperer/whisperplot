@@ -69,6 +69,7 @@ add_executable(whisperplot
         src/phase3.cpp
         src/phase4.cpp
         src/buffer.cpp
+        src/encoding.cpp
         src/calculate_bucket.cpp
         chiapos_inc/chacha8.c
         ${BLAKE3_SRC})

@@ -253,7 +253,7 @@ void Plotter<K>::phase1ThreadC(
         std::atomic<uint64_t>* coordinator,
         map<uint32_t, vector<uint32_t>> *new_entry_positions,
         map<uint32_t, Penguin<LinePointEntryUIDPackedEntry<K>> *> line_point_bucket_indexes,
-        vector<TemporaryPark<line_point_delta_len_bits> *> *parks,
+        vector<DeltaPark<line_point_delta_len_bits> *> *parks,
         Buffer* buffer)
 {
     PinToCpuid(cpu_id);
@@ -302,7 +302,7 @@ void Plotter<K>::phase1ThreadC(
         } customLess;
         sort(entries.begin(), entries.begin()+num_entries, customLess);
 // We have a sorted entries list! Emit to output buffer and record new positions
-        auto new_park = new TemporaryPark<line_point_delta_len_bits>(num_entries);
+        auto new_park = new DeltaPark<line_point_delta_len_bits>(num_entries);
         new_park->start_pos = total_entries_so_far;
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
@@ -313,7 +313,7 @@ void Plotter<K>::phase1ThreadC(
             assert(entries[i].second.entry_uid < (1ULL<<(K+2)));
             (*new_entry_positions)[entries[i].first][entries[i].second.entry_uid] = i + total_entries_so_far;
         }
-        new_park->addEntries(line_points.data());
+        new_park->addEntries(line_points);
         (*parks)[row_id] = new_park;
 /*
         // Check that we can recover the data
@@ -348,7 +348,7 @@ void Plotter<K>::phase1ThreadD(
         std::atomic<uint64_t>* coordinator,
         map<uint32_t, vector<uint32_t>> *new_entry_positions,
         std::map<uint32_t, Penguin<YCPackedEntry<K, 5>>*> line_point_bucket_indexes,
-        vector<TemporaryPark<finaltable_y_delta_len_bits> *> *parks,
+        vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
         Buffer* buffer,
         AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used)
 {
@@ -392,7 +392,7 @@ void Plotter<K>::phase1ThreadD(
         sort(entries.begin(), entries.begin()+num_entries, customLess);
 
 // We have a sorted entries list! Emit to output buffer
-        auto new_park = new TemporaryPark<finaltable_y_delta_len_bits>(num_entries);
+        auto new_park = new DeltaPark<finaltable_y_delta_len_bits>(num_entries);
         new_park->start_pos = total_entries_so_far;
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
@@ -400,7 +400,7 @@ void Plotter<K>::phase1ThreadD(
         {
             line_points[i] = entries[i].getY();
         }
-        new_park->addEntries(line_points.data());
+        new_park->addEntries(line_points);
         (*parks)[bucket_id] = new_park;
     }
 }
@@ -451,9 +451,9 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
     //new_line_point_bucket_index->SumBucketOffsets();
 
 // Setup the new park list and buffer
-    TemporaryPark<line_point_delta_len_bits> test_park(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
+    DeltaPark<line_point_delta_len_bits> test_park(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointEntryUIDPackedEntry<K>::num_sort_rows));
-    graph_parks.push_back(vector<TemporaryPark<line_point_delta_len_bits>*>(LinePointEntryUIDPackedEntry<K>::num_sort_rows));
+    graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointEntryUIDPackedEntry<K>::num_sort_rows));
 
     coordinator = 0;
     cout << "Part C"<< (uint32_t)table_index;
@@ -526,7 +526,7 @@ void Plotter<K>::phase1()
     auto i4 = phase1DoTable<4>(i3);
     auto i5 = phase1DoTable<5>(i4);
 
-    TemporaryPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<K, 5>::max_entries_per_sort_row);
+    DeltaPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<K, 5>::max_entries_per_sort_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<K, 5>::num_sort_rows));
     final_parks.resize(YCPackedEntry<K, 5>::num_sort_rows);
 
@@ -567,7 +567,7 @@ void Plotter<K>::check()
     for (auto& park : graph_parks[0])
     {
         vector<uint128_t> line_points(park->size());
-        park->readEntries(line_points.data());
+        park->readEntries(line_points);
         for (auto line_point : line_points)
         {
             auto res = Encoding::LinePointToSquare(line_point);
@@ -591,7 +591,7 @@ void Plotter<K>::check()
     for (auto& park : final_parks)
     {
         vector<uint128_t> line_points(park->size());
-        park->readEntries(line_points.data());
+        park->readEntries(line_points);
         for (auto line_point : line_points)
         {
             pos = line_point&((1ULL << K)-1);
@@ -621,7 +621,7 @@ void Plotter<K>::check()
                     {
                         // pos is in this park
                         vector<uint128_t> line_points(park->size());
-                        park->readEntries(line_points.data());
+                        park->readEntries(line_points);
                         uint128_t line_point = line_points[park->size() - (entries_so_far - next_pos)];
                         auto res = Encoding::LinePointToSquare(line_point);
                         uint8_t mask = 1ULL<<(l);
