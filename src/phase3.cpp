@@ -92,8 +92,15 @@ void Plotter<K>::phase3ThreadA(
 			break;
 		}
 
+		// Pad the end with more stuff
+		while (park_entry_i < kEntriesPerPark)
+        {
+            park_line_points[park_entry_i] = park_line_points[park_entry_i-1]+1;
+            park_entry_i++;
+        }
+
 		Park* p;
-		if (table_index ==  0) {
+		if (table_index == 0) {
             p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDeltaTable1, kRValues[table_index]>(kEntriesPerPark);
         }
 		else {
@@ -170,8 +177,8 @@ void Plotter<K>::phase3()
     uint32_t size_C3 = EntrySizes::CalculateC3Size(K);
     predicted_file_size_bytes += (total_C1_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C2_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C1_entries)*size_C3;
 
-    //output_buffer = new Buffer(predicted_file_size_bytes*1.5, filename);
-    output_buffer = new Buffer(predicted_file_size_bytes*1.5);
+    output_buffer = new Buffer(predicted_file_size_bytes*1.5, filename);
+    //output_buffer = new Buffer(predicted_file_size_bytes*1.5);
 
     // 19 bytes  - "Proof of Space Plot" (utf-8)
     // 32 bytes  - unique plot id
