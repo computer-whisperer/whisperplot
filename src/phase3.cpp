@@ -19,8 +19,10 @@ void Plotter<K>::phase3ThreadA(
         atomic<uint64_t>* coordinator,
         vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
         AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* entries_used,
-        AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>* final_positions,
-        Buffer* output_buffer)
+        vector<AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>>* final_positions,
+        Buffer* output_buffer,
+        vector<vector<Park*>>* final_parks,
+        uint64_t start_offset)
 {
     PinToCpuid(cpu_id);
     vector<uint128_t> temporary_park_line_points(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
@@ -40,7 +42,11 @@ void Plotter<K>::phase3ThreadA(
 
 		while (temporary_park_id < temporary_parks->size())
 		{
-			if (temporary_parks->at(temporary_park_id)->start_pos + temporary_parks->at(temporary_park_id)->size() > park_starting_pos)
+		    uint64_t old_end_pos = temporary_parks->at(temporary_park_id)->start_pos + temporary_parks->at(temporary_park_id)->size();
+		    uint64_t new_end_pos = old_end_pos;
+            if (table_index < 5)
+                new_end_pos = (*final_positions)[table_index].read(old_end_pos).value;
+			if (new_end_pos > park_starting_pos)
 			{
 
                 temporary_parks->at(temporary_park_id)->readEntries(temporary_park_line_points);
@@ -48,12 +54,15 @@ void Plotter<K>::phase3ThreadA(
                 uint128_t prev_old_line_point = 0;
                 for (uint64_t i = 0; i < temporary_parks->at(temporary_park_id)->size(); i++)
 				{
-				    uint64_t pos = temporary_parks->at(temporary_park_id)->start_pos+i;
-				    if (pos < park_starting_pos)
+				    uint64_t old_pos = temporary_parks->at(temporary_park_id)->start_pos+i;
+				    uint64_t new_pos = old_pos;
+				    if (table_index < 5)
+				        new_pos = (*final_positions)[table_index].read(old_pos).value;
+				    if (new_pos < park_starting_pos)
                     {
 				        continue;
                     }
-				    if (entries_used->read(pos).value)
+				    if ((table_index == 5) || entries_used->read(old_pos).value)
                     {
 
 				        uint128_t line_point = temporary_park_line_points[i];
@@ -62,13 +71,18 @@ void Plotter<K>::phase3ThreadA(
                         {
                             // Re-encode line point to compensate for dropped entries in previous table
                             auto res = Encoding::LinePointToSquare(line_point);
-                            uint64_t x_new = final_positions->read(res.first).value;
-                            uint64_t y_new = final_positions->read(res.second).value;
+                            uint64_t x_new = (*final_positions)[table_index-1].read(res.first).value;
+                            uint64_t y_new = (*final_positions)[table_index-1].read(res.second).value;
                             assert(x_new <= res.first);
                             assert(y_new <= res.second);
                             line_point = Encoding::SquareToLinePoint(x_new, y_new);
                             assert(temporary_park_line_points[i]>=prev_old_line_point);
                             assert(line_point>=prev_new_line_point);
+                            /*
+                            if ((table_index == 5) && (park_entry_i == 265) && (park_id == 0))
+                            {
+                                cout << "I found it" << endl;
+                            }*/
                         }
                         park_line_points[park_entry_i++] = line_point;
                         prev_old_line_point = temporary_park_line_points[i];
@@ -92,12 +106,11 @@ void Plotter<K>::phase3ThreadA(
 			break;
 		}
 
+		// Kick the insertion pointer down the output buffer
+		output_buffer->GetInsertionOffset(park_size_bytes);
+
 		// Pad the end with more stuff
-		while (park_entry_i < kEntriesPerPark)
-        {
-            park_line_points[park_entry_i] = park_line_points[park_entry_i-1]+1;
-            park_entry_i++;
-        }
+		park_line_points.resize(park_entry_i);
 
 		Park* p;
 		if (table_index == 0) {
@@ -106,16 +119,27 @@ void Plotter<K>::phase3ThreadA(
 		else {
             p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDelta, kRValues[table_index]>(kEntriesPerPark);
         }
-        p->bind(output_buffer->data + *(output_buffer->insert_pos) + park_id * park_size_bytes);
+        p->bind(output_buffer->data + start_offset + park_id * park_size_bytes);
 		p->addEntries(park_line_points);
-		p->readEntries(park_line_points_check);
 
+		// Test stuff here
+		/*
+        (*final_parks)[table_index][park_id] = p;
+		p->readEntries(park_line_points_check);
 		for (uint64_t i = 0; i < kEntriesPerPark; i++)
         {
 		    assert(park_line_points[i] == park_line_points_check[i]);
         }
+		*/
+        delete p;
 
-		delete p;
+		// Verify that the linepoints line up
+		/*
+		for (uint64_t i = 0; i < park_entry_i; i++)
+        {
+		    uint64_t new_pos = park_id*kEntriesPerPark + i;
+        }
+        */
 	}
 }
 
@@ -124,22 +148,31 @@ template <int8_t table_index>
 void Plotter<K>::phase3DoTable()
 {
     // Wait for the final positions table to be ready
-    phase2b_threads[table_index].join();
+    final_parks.emplace_back();
+    AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used = nullptr;
+    if (table_index < 5)
+    {
+        phase2b_threads[table_index].join();
+        current_entries_used = &(entries_used[table_index]);
+    }
     final_table_begin_pointers[table_index] = bswap_64(*(output_buffer->insert_pos));
     cout << "Part A"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
     vector<thread> threads;
     std::atomic<uint64_t> coordinator = 0;
+    uint64_t start_offset = *output_buffer->insert_pos;
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
                 Plotter<K>::phase3ThreadA<table_index>,
                 cpu_id,
                 &coordinator,
-                &(graph_parks[table_index]),
-                &(entries_used[table_index]),
-                &(final_positions[table_index-1]),
-                output_buffer));
+                &(phase1_graph_parks[table_index]),
+                current_entries_used,
+                &(final_positions),
+                output_buffer,
+                &final_parks,
+                start_offset));
     }
 
     for (auto &it: threads)
@@ -147,13 +180,6 @@ void Plotter<K>::phase3DoTable()
         it.join();
     }
     cout << " (" << time(nullptr) - start_seconds << "s)" << endl;
-
-
-    // setup output_table_offset for next iteration
-    uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
-    uint64_t num_entries = (*(graph_parks[table_index].end()-1))->start_pos + (*(graph_parks[table_index].end()-1))->size();
-    uint64_t parks_needed = (num_entries+kEntriesPerPark-1)/kEntriesPerPark;
-    output_buffer->GetInsertionOffset(parks_needed*park_size_bytes);
 
     delete buffers[table_index];
 }
@@ -167,12 +193,12 @@ void Plotter<K>::phase3()
 	for (uint8_t table_index = 0; table_index < 6; table_index++)
 	{
 		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
-		auto final_park = *(graph_parks[table_index].end()-1);
+		auto final_park = *(phase1_graph_parks[table_index].end() - 1);
 		uint64_t num_parks = (final_park->start_pos + final_park->size() + kEntriesPerPark-1)/kEntriesPerPark;
 		predicted_file_size_bytes += park_size_bytes*num_parks;
 	}
 
-    uint64_t total_C1_entries = cdiv(((*(final_parks.end()-1))->start_pos + (*(final_parks.end()-1))->size()), kCheckpoint1Interval);
+    uint64_t total_C1_entries = cdiv(((*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size()), kCheckpoint1Interval);
     uint64_t total_C2_entries = cdiv(total_C1_entries, kCheckpoint2Interval);
     uint32_t size_C3 = EntrySizes::CalculateC3Size(K);
     predicted_file_size_bytes += (total_C1_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C2_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C1_entries)*size_C3;
@@ -197,7 +223,7 @@ void Plotter<K>::phase3()
     *(uint16_t*)(output_buffer->data + output_buffer->GetInsertionOffset(2)) = bswap_16(memo_size);
     output_buffer->InsertData((void*)memo, memo_size);
 
-    uint8_t pointers[12 * 8];
+    uint8_t pointers[10 * 8];
     uint32_t pointers_offset = output_buffer->InsertData(pointers, sizeof(pointers));
     final_table_begin_pointers = (uint64_t*)(output_buffer->data + pointers_offset);
 

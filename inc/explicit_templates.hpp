@@ -9,6 +9,5 @@ template class Plotter<18>;
 template class Plotter<22>;
 template class Plotter<26>;
 template class Plotter<32>;
-template class Plotter<33>;
 
 #endif //WHISPERPLOT_EXPLICIT_TEMPLATES_HPP

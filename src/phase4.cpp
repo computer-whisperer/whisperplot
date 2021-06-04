@@ -12,7 +12,7 @@ void Plotter<K>::phase4()
 {
     uint64_t phase_start_seconds = time(nullptr);
     uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;
-    uint64_t num_entries = (*(final_parks.end()-1))->start_pos + (*(final_parks.end()-1))->size();
+    uint64_t num_entries = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
     uint64_t number_of_p7_parks = (num_entries + kEntriesPerPark-1)/kEntriesPerPark;
 
     uint64_t begin_byte_C1 = bswap_64(final_table_begin_pointers[6]) + number_of_p7_parks * P7_park_size;
@@ -28,7 +28,7 @@ void Plotter<K>::phase4()
     final_table_begin_pointers[7] = bswap_64(begin_byte_C1);
     final_table_begin_pointers[8] = bswap_64(begin_byte_C2);
     final_table_begin_pointers[9] = bswap_64(begin_byte_C3);
-    final_table_begin_pointers[10] = bswap_64(end_byte);
+    //final_table_begin_pointers[10] = bswap_64(end_byte);
 
     uint64_t plot_file_reader = 0;
     uint64_t final_file_writer_1 = begin_byte_C1;
@@ -57,15 +57,17 @@ void Plotter<K>::phase4()
     ParkBits to_write_p7;
     // We read each table7 entry, which is sorted by f7, but we don't need f7 anymore. Instead,
     // we will just store pos6, and the deltas in table C3, and checkpoints in tables C1 and C2.
-    for (auto & park : final_parks)
+    for (auto & park : phase1_final_parks)
     {
         line_points.resize(park->size());
         park->readEntries(line_points);
 
         for (auto & line_point: line_points)
         {
-            uint64_t pos = line_point&((1ULL << K)-1);
-            uint64_t y = line_point>>K;
+            uint64_t pos = line_point&((1ULL << (K+1))-1);
+            uint64_t y = line_point>>(K+1);
+
+            assert(prev_y <= y);
 
             Bits entry_y_bits = Bits(y, K);
 
@@ -180,8 +182,8 @@ void Plotter<K>::phase4()
 
     std::cout << "\tFinal table pointers:" << std::endl << std::hex;
 
-    for (int i = 1; i <= 10; i++) {
-        std::cout << "\t" << (i < 8 ? "P" : "C") << (i < 8 ? i : i - 7);
+    for (int i = 0; i < 10; i++) {
+        std::cout << "\t" << (i < 7 ? "P" : "C") << (i < 7 ? i : i - 6);
         std::cout << ": 0x" << bswap_64(final_table_begin_pointers[i]) << std::endl;
     }
     std::cout << std::dec;

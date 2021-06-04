@@ -99,7 +99,7 @@ template<uint8_t K, int8_t table_index> struct YCPackedEntry
     uint128_t c;
 
     static struct BucketPageIndexEntry_YCSizes<K, table_index> sizes;
-    static constexpr uint64_t num_bc_buckets_per_sort_row = 1024;
+    static constexpr uint64_t num_bc_buckets_per_sort_row = 4096;
     static constexpr uint64_t sort_row_divisor = kBC * num_bc_buckets_per_sort_row;
     static constexpr uint64_t num_sort_rows = (1ULL << sizes.y_len_bits) / sort_row_divisor + 1;
     static constexpr uint64_t max_entries_per_sort_row = sizes.num_entries_per_bc_bucket * num_bc_buckets_per_sort_row;
@@ -192,7 +192,7 @@ template<uint8_t K> struct LinePointEntryUIDPackedEntry
 };
 
 // Setting the backing store to zero is a sufficient initializer
-template <class E, class E2, class T, uint32_t reserved_count>
+template <class E, class E2, class T, uint64_t reserved_count>
 struct BasePackedArray
 {
     static constexpr uint64_t reserved_len_bits = T::len_bits*reserved_count;
@@ -204,7 +204,7 @@ struct BasePackedArray
     BasePackedArray(const BasePackedArray &a)
     {
         count = (uint64_t)a.count;
-        for (uint32_t i = 0; i < (T::len_bits*count+7)/8; i++)
+        for (uint64_t i = 0; i < (T::len_bits*count+7)/8; i++)
         {
             data[i] = (uint8_t)a.data[i];
         }
@@ -260,10 +260,10 @@ struct BasePackedArray
 
 using BooleanPackedEntry = SimplePackedEntry<uint8_t, 1>;
 
-template<class T, uint32_t reserved_count>
+template<class T, uint64_t reserved_count>
 using AtomicPackedArray = BasePackedArray<std::atomic<uint8_t>, std::atomic<uint64_t>, T, reserved_count>;
 
-template<class T, uint32_t reserved_count>
+template<class T, uint64_t reserved_count>
 using PackedArray = BasePackedArray<uint8_t, uint64_t, T, reserved_count>;
 
 template <class T> class Penguin

@@ -35,7 +35,7 @@ void doPlot(const uint8_t* id_in, const uint8_t* memo_in, const uint32_t memo_si
     res->phase2();
     res->phase3();
     res->phase4();
-    cout << res->final_parks.size() << endl;
+    cout << res->phase1_final_parks.size() << endl;
 }
 
 int main(int argc, char *argv[]) {
@@ -108,11 +108,8 @@ int main(int argc, char *argv[]) {
         case 32:
             doPlot<32>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
             break;
-        case 33:
-            doPlot<33>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
-            break;
         default:
-            cout << "Unsupported k selected, please choose from 18, 22, 26, 32, or 33." << endl;
+            cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
     }
 
 

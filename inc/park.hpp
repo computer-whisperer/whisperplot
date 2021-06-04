@@ -102,10 +102,10 @@ public:
         // significant (k-kMinusStubs) bits, and largely random/incompressible. The small
         // delta is the rest, which can be efficiently encoded since it's usually very
         // small.
-        std::vector<uint64_t> park_stubs(num_entries-1);
-        std::vector<uint8_t> park_deltas(num_entries-1);
+        std::vector<uint64_t> park_stubs(src.size()-1);
+        std::vector<uint8_t> park_deltas(src.size()-1);
 
-        for (uint32_t i = 1; i < num_entries; i++)
+        for (uint32_t i = 1; i < src.size(); i++)
         {
             assert(src[i] > src[i-1]);
             uint128_t big_delta = src[i] - src[i-1];
@@ -127,7 +127,7 @@ public:
 
         // We use ParkBits instead of Bits since it allows storing more data
         ParkBits park_stubs_bits;
-        for (uint32_t i = 0; i < num_entries-1; i++)
+        for (uint32_t i = 0; i < src.size()-1; i++)
         {
             park_stubs_bits.AppendValue(park_stubs[i], (delta_len - stub_minus_bits));
         }
@@ -140,11 +140,11 @@ public:
         // The stubs are random so they don't need encoding. But deltas are more likely to
         // be small, so we can compress them
         uint8_t *deltas_start = dest + 2;
-        size_t deltas_size = Encoding::ANSEncodeDeltas(park_deltas, num_entries-1, R, deltas_start);
+        size_t deltas_size = Encoding::ANSEncodeDeltas(park_deltas, src.size()-1, R, deltas_start);
 
         if (!deltas_size) {
             // Uncompressed
-            deltas_size = num_entries-1;
+            deltas_size = src.size()-1;
             Util::IntToTwoBytesLE(dest, deltas_size | 0x8000);
             memcpy(deltas_start, park_deltas.data(), deltas_size);
         } else {

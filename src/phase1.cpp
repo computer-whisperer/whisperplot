@@ -73,7 +73,7 @@ template <int8_t table_index>
 void Plotter<K>::phase1ThreadB(
         uint32_t cpu_id,
         std::atomic<uint64_t> * coordinator,
-        map<uint32_t, vector<uint32_t>> *new_entry_positions,
+        map<uint32_t, vector<uint64_t>> *new_entry_positions,
         map<uint32_t, Penguin<YCPackedEntry<K, table_index - 1>> *> *prev_penguins,
         Penguin<YCPackedEntry<K, table_index>> * new_yc_penguin,
         Penguin<LinePointEntryUIDPackedEntry<K>> * new_line_point_penguin)
@@ -189,8 +189,9 @@ void Plotter<K>::phase1ThreadB(
                                 Bits(right_entry.c, c_len));
 
                         YCPackedEntry<K, table_index> new_entry;
-                        new_entry.setY(out.first.GetValue());
+
                         if (table_index < 5) {
+                            new_entry.setY(out.first.GetValue());
                             uint8_t buff[32];
                             memset(buff, 0, sizeof(buff));
                             out.second.ToBytes(buff);
@@ -199,7 +200,7 @@ void Plotter<K>::phase1ThreadB(
                         }
                         else
                         {
-                            new_entry.setY(out.first.GetValue() % (1ULL << K));
+                            new_entry.setY(out.first.Slice(0, K).GetValue());
                         }
                         uint64_t new_entry_id = new_yc_penguin->addEntry(new_entry);
                         uint64_t sort_row = new_entry.sort_row;
@@ -223,19 +224,6 @@ void Plotter<K>::phase1ThreadB(
                                                                                          new_entry_id);
                         assert(line_point_entry.entry_uid < (1ULL << (K + 2)));
                         new_line_point_penguin->addEntry(line_point_entry);
-/*
-                        if (table_index == 0)
-                        {
-                            auto res = Encoding::LinePointToSquare(line_point_entry.getLinePoint());
-                            Bits x2 = f1.CalculateF(Bits(res.first, K));
-                            Bits y2 = f1.CalculateF(Bits(res.second, K));
-                            if (x2.GetValue() > y2.GetValue())
-                            {
-                                swap(x2, y2);
-                            }
-                            assert_matching(x2.GetValue(), y2.GetValue());
-                        }
-                        */
                     }
                 }
 
@@ -251,7 +239,7 @@ template <int8_t table_index>
 void Plotter<K>::phase1ThreadC(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
-        map<uint32_t, vector<uint32_t>> *new_entry_positions,
+        map<uint32_t, vector<uint64_t>> *new_entry_positions,
         map<uint32_t, Penguin<LinePointEntryUIDPackedEntry<K>> *> line_point_bucket_indexes,
         vector<DeltaPark<line_point_delta_len_bits> *> *parks,
         Buffer* buffer)
@@ -307,7 +295,7 @@ void Plotter<K>::phase1ThreadC(
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
         line_points.clear();
-        for (uint32_t i = 0; i < num_entries; i++)
+        for (uint64_t i = 0; i < num_entries; i++)
         {
             line_points.push_back(entries[i].second.getLinePoint());
             assert(entries[i].second.entry_uid < (1ULL<<(K+2)));
@@ -346,11 +334,10 @@ template <uint8_t K>
 void Plotter<K>::phase1ThreadD(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
-        map<uint32_t, vector<uint32_t>> *new_entry_positions,
-        std::map<uint32_t, Penguin<YCPackedEntry<K, 5>>*> line_point_bucket_indexes,
+        map<uint32_t, vector<uint64_t>> *new_entry_positions,
+        std::map<uint32_t, Penguin<YCPackedEntry<K, 5>>*> line_point_penguins,
         vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
-        Buffer* buffer,
-        AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used)
+        Buffer* buffer)
 {
     PinToCpuid(cpu_id);
     vector<YCPackedEntry<K, 5>> entries(YCPackedEntry<K, 5>::max_entries_per_sort_row);
@@ -358,30 +345,29 @@ void Plotter<K>::phase1ThreadD(
     uint64_t total_entries_so_far = 0;
     while (true)
     {
-        uint64_t bucket_id = coordinator->fetch_add(1);
-        if (bucket_id >= YCPackedEntry<K, 5>::num_sort_rows)
+        uint64_t row_id = coordinator->fetch_add(1);
+        if (row_id >= YCPackedEntry<K, 5>::num_sort_rows)
             break;
 
-        for (auto& [numa_node, penguin] : line_point_bucket_indexes) {
-            total_entries_so_far += penguin->getCountInRow(bucket_id);
+        for (auto& [numa_node, penguin] : line_point_penguins) {
+            total_entries_so_far += penguin->getCountInRow(row_id);
         }
 // Sort all entries in this bucket
         entries.clear();
-        uint32_t num_entries = 0;
-        for (auto& [numa_node, bucket_index] : line_point_bucket_indexes)
+        uint64_t num_entries = 0;
+        for (auto& [numa_node, penguin] : line_point_penguins)
         {
-            uint32_t entries_in_numa = bucket_index->getCountInRow(bucket_id);
-            for (uint32_t i = 0; i < entries_in_numa; i++)
+            uint64_t entries_in_numa = penguin->getCountInRow(row_id);
+            for (uint64_t i = 0; i < entries_in_numa; i++)
             {
-                uint32_t new_pos = (*new_entry_positions)[numa_node][bucket_index->getUniqueIdentifier(bucket_id, i)];
-                auto e = bucket_index->readEntry(bucket_id, i);
-                e.setY(e.getY()<<K | new_pos);
-                entries[num_entries + i] = e;
+                uint64_t new_pos = (*new_entry_positions)[numa_node][penguin->getUniqueIdentifier(row_id, i)];
+                auto e = penguin->readEntry(row_id, i);
 
-                prev_entries_used->set(new_pos, BooleanPackedEntry(true));
+                e.setY(e.getY()<<(K+1) | new_pos);
+                entries.push_back(e);
             }
             num_entries += entries_in_numa;
-            bucket_index->popRow(bucket_id);
+            penguin->popRow(row_id);
         }
         //assert(num_entries < YCPackedEntry<K, 5>::max_entries_per_sort_row);
 
@@ -393,7 +379,7 @@ void Plotter<K>::phase1ThreadD(
 
 // We have a sorted entries list! Emit to output buffer
         auto new_park = new DeltaPark<finaltable_y_delta_len_bits>(num_entries);
-        new_park->start_pos = total_entries_so_far;
+        new_park->start_pos = total_entries_so_far - num_entries;
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
         for (uint32_t i = 0; i < num_entries; i++)
@@ -401,7 +387,7 @@ void Plotter<K>::phase1ThreadD(
             line_points[i] = entries[i].getY();
         }
         new_park->addEntries(line_points);
-        (*parks)[bucket_id] = new_park;
+        (*parks)[row_id] = new_park;
     }
 }
 
@@ -453,7 +439,7 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
 // Setup the new park list and buffer
     DeltaPark<line_point_delta_len_bits> test_park(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointEntryUIDPackedEntry<K>::num_sort_rows));
-    graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointEntryUIDPackedEntry<K>::num_sort_rows));
+    phase1_graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointEntryUIDPackedEntry<K>::num_sort_rows));
 
     coordinator = 0;
     cout << "Part C"<< (uint32_t)table_index;
@@ -467,7 +453,7 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
                 &coordinator,
                 &d_new_entry_positions,
                 new_line_point_bucket_indexes,
-                &(graph_parks[table_index]),
+                &(phase1_graph_parks[table_index]),
                 buffers[table_index]
         ));
     }
@@ -528,11 +514,9 @@ void Plotter<K>::phase1()
 
     DeltaPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<K, 5>::max_entries_per_sort_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<K, 5>::num_sort_rows));
-    final_parks.resize(YCPackedEntry<K, 5>::num_sort_rows);
+    phase1_final_parks.resize(YCPackedEntry<K, 5>::num_sort_rows);
 
 
-    entries_used.resize(6);
-    entries_used[5].fill(BooleanPackedEntry(false));
 
     cout << "Part D";
     part_start_seconds = time(nullptr);
@@ -546,9 +530,8 @@ void Plotter<K>::phase1()
                 &coordinator,
                 &d_new_entry_positions,
                 i5,
-                &final_parks,
-                buffers[6],
-                &(entries_used[5])));
+                &phase1_final_parks,
+                buffers[6]));
     }
     for (auto &it: threads)
     {
@@ -564,11 +547,12 @@ void Plotter<K>::check()
 {
     // Check that all matching conditions from the first table actually work
 	F1Calculator f1(K, id);
-    for (auto& park : graph_parks[0])
+	/*
+    for (auto& park : phase1_graph_parks[0])
     {
         vector<uint128_t> line_points(park->size());
         park->readEntries(line_points);
-        for (auto line_point : line_points)
+        for (auto& line_point : line_points)
         {
             auto res = Encoding::LinePointToSquare(line_point);
 
@@ -581,21 +565,22 @@ void Plotter<K>::check()
             assert_matching(x.GetValue(), y.GetValue());
         }
     }
+    */
 	// Test that we can draw good proofs from this
-	uint64_t challenge = 0x2c16;
+	uint64_t challenge = 0x4819;
 	challenge = challenge%(1ULL<<K);
 	uint64_t i;
 	cout << "Looking for : " << challenge << endl;
     uint64_t pos;
     bool found = false;
-    for (auto& park : final_parks)
+    for (auto& park : phase1_final_parks)
     {
         vector<uint128_t> line_points(park->size());
         park->readEntries(line_points);
-        for (auto line_point : line_points)
+        for (auto& line_point : line_points)
         {
-            pos = line_point&((1ULL << K)-1);
-            uint64_t y = line_point>>K;
+            pos = line_point&((1ULL << (K+1))-1);
+            uint64_t y = line_point>>(K+1);
             if (y == challenge) {
                 found = true;
                 break;
@@ -614,7 +599,7 @@ void Plotter<K>::check()
 			{
 				// Find next_pos
 				uint64_t entries_so_far = 0;
-                for (auto& park : graph_parks[l])
+                for (auto& park : phase1_graph_parks[l])
                 {
                     entries_so_far += park->size();
                     if (next_pos < entries_so_far)
@@ -685,7 +670,7 @@ void Plotter<K>::check()
 			input_collations = output_collations;
 			input_fs = output_fs;
 		}
-		cout << "Result of tree: f7(...) = " << input_fs[0].GetValue()%(1ULL<<K) << endl;
+		cout << "Result of tree: f7(...) = " << input_fs[0].Slice(0, K).GetValue() << endl;
 	}
 	else
 	{
