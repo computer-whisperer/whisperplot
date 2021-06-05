@@ -3,7 +3,7 @@
 #include "encoding.hpp"
 #include "entry_sizes.hpp"
 #include "plotter.hpp"
-#include "util.hpp"
+#include "chiapos_util.hpp"
 
 using namespace std;
 

@@ -6,7 +6,7 @@
 
 #include "encoding.hpp"
 #include "buffer.hpp"
-#include "util.hpp"
+#include "chiapos_util.hpp"
 #include "thread_mgr.hpp"
 #include "plotter.hpp"
 

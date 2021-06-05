@@ -16,7 +16,7 @@
 #define SRC_CPP_POS_CONSTANTS_HPP_
 
 #include <numeric>
-#include "util.hpp"
+#include "chiapos_util.hpp"
 
 // Unique plot id which will be used as a ChaCha8 key, and determines the PoSpace.
 const uint32_t kIdLen = 32;

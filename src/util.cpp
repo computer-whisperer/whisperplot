@@ -28,7 +28,7 @@
 #include <utility>
 #include <vector>
 
-#include "util.hpp"
+#include "chiapos_util.hpp"
 
 
 #ifdef _WIN32

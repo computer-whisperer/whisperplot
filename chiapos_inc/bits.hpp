@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "./util.hpp"
+#include "./chiapos_util.hpp"
 #include "exceptions.hpp"
 
 // 64 * 2^16. 2^17 values, each value can store 64 bits.

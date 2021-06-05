@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 project(whisperplot C CXX ASM)
-#set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE FALSE)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -36,6 +36,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cxxopts)
 
+SET(BUILD_BLS_PYTHON_BINDINGS FALSE)
+FetchContent_Declare(
+        bls-signatures
+        GIT_REPOSITORY https://github.com/computer-whisperer/bls-signatures.git
+        GIT_TAG main
+)
+FetchContent_MakeAvailable(bls-signatures)
+
 FetchContent_Declare(
         bitpacker
         GIT_REPOSITORY https://github.com/CrustyAuklet/bitpacker.git
@@ -60,7 +68,15 @@ set(BLAKE3_SRC
         chiapos_inc/b3/blake3_sse41_x86-64_unix.S
         )
 
-include_directories(inc chiapos_inc ${cxxopts_SOURCE_DIR}/include ${bitpacker_SOURCE_DIR}/include/bitpacker)
+include_directories(
+        inc
+        chiapos_inc
+        ${cxxopts_SOURCE_DIR}/include
+        ${bitpacker_SOURCE_DIR}/include/bitpacker
+        ${bls-signatures_SOURCE_DIR}/src
+        ${bls-signatures_SOURCE_DIR}/build
+        ${bls-signatures_SOURCE_DIR}/../relic-src/include
+        ${bls-signatures_SOURCE_DIR}/../relic-build/include)
 
 add_executable(whisperplot
         src/main.cpp
@@ -79,4 +95,4 @@ add_library(uint128 STATIC chiapos_inc/uint128_t/uint128_t.cpp)
 target_include_directories(uint128 PUBLIC chiapos_inc/uint128_t)
 
 
-target_link_libraries(whisperplot fse numa stdc++fs Threads::Threads)
+target_link_libraries(whisperplot fse numa stdc++fs Threads::Threads bls)

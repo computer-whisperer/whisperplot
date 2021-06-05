@@ -27,7 +27,7 @@
 #include "FiniteStateEntropy/lib/error_public.h"
 #include "bits.hpp"
 #include "exceptions.hpp"
-#include "util.hpp"
+#include "chiapos_util.hpp"
 
 #include <mutex>
 

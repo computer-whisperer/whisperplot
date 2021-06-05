@@ -28,7 +28,7 @@
 
 #include "chacha8.h"
 #include "pos_constants.hpp"
-#include "util.hpp"
+#include "chiapos_util.hpp"
 #include "calculate_bucket.hpp"
 
 

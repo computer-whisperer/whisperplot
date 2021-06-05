@@ -1,6 +1,6 @@
 #ifndef PARK_HPP
 #define PARK_HPP
-#include "util.hpp"
+#include "chiapos_util.hpp"
 #include "encoding.hpp"
 #include <cstdint>
 #include <vector>

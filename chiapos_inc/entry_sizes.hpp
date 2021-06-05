@@ -23,7 +23,7 @@
 
 #include "calculate_bucket.hpp"
 #include "pos_constants.hpp"
-#include "util.hpp"
+#include "chiapos_util.hpp"
 
 class EntrySizes {
 public:
