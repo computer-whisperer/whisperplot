@@ -72,8 +72,11 @@ public:
     }
 };
 
-template <uint32_t value_len, uint32_t delta_len, uint32_t stub_minus_bits, double max_average_delta, double R>
+template <uint32_t value_len, uint32_t delta_len, uint32_t stub_minus_bits, uint32_t max_average_delta_times_100, uint32_t R_times_100>
 class CompressedPark : public Park {
+    static constexpr float R = ((float)R_times_100)/100;
+    static constexpr float max_average_delta = ((float)max_average_delta_times_100)/100;
+
     uint32_t getStubsSize()
     {
         return ((num_entries - 1) * (delta_len - stub_minus_bits) + 7) / 8;

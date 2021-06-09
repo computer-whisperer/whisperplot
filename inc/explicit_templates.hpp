@@ -5,9 +5,11 @@
 #ifndef WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 #define WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 
-template class Plotter<18>;
-template class Plotter<22>;
-template class Plotter<26>;
-template class Plotter<32>;
+constexpr uint32_t test_num_rows = 1ULL << 16;
+
+template class Plotter<18, test_num_rows>;
+template class Plotter<22, test_num_rows>;
+template class Plotter<26, test_num_rows>;
+template class Plotter<32, test_num_rows>;
 
 #endif //WHISPERPLOT_EXPLICIT_TEMPLATES_HPP

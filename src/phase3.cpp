@@ -12,20 +12,20 @@
 
 using namespace std;
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase3ThreadA(
+void Plotter<K, num_rows>::phase3ThreadA(
         uint32_t cpu_id,
         atomic<uint64_t>* coordinator,
         vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
-        AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* entries_used,
-        vector<AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>>* final_positions,
+        entries_used_type* entries_used,
+        vector<p2_final_positions_type>* final_positions,
         Buffer* output_buffer,
         vector<vector<Park*>>* final_parks,
         uint64_t start_offset)
 {
     PinToCpuid(cpu_id);
-    vector<uint128_t> temporary_park_line_points(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
+    vector<uint128_t> temporary_park_line_points(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     vector<uint128_t> park_line_points(kEntriesPerPark);
     vector<uint128_t> park_line_points_check(kEntriesPerPark);
 	while (true)
@@ -45,7 +45,7 @@ void Plotter<K>::phase3ThreadA(
 		    uint64_t old_end_pos = temporary_parks->at(temporary_park_id)->start_pos + temporary_parks->at(temporary_park_id)->size();
 		    uint64_t new_end_pos = old_end_pos;
             if (table_index < 5)
-                new_end_pos = (*final_positions)[table_index].read(old_end_pos).value;
+                new_end_pos = (*final_positions)[table_index].get(old_end_pos).getY();
 			if (new_end_pos > park_starting_pos)
 			{
 
@@ -57,12 +57,12 @@ void Plotter<K>::phase3ThreadA(
 				    uint64_t old_pos = temporary_parks->at(temporary_park_id)->start_pos+i;
 				    uint64_t new_pos = old_pos;
 				    if (table_index < 5)
-				        new_pos = (*final_positions)[table_index].read(old_pos).value;
+				        new_pos = (*final_positions)[table_index].get(old_pos).getY();
 				    if (new_pos < park_starting_pos)
                     {
 				        continue;
                     }
-				    if ((table_index == 5) || entries_used->read(old_pos).value)
+				    if ((table_index == 5) || entries_used->get(old_pos).getY())
                     {
 
 				        uint128_t line_point = temporary_park_line_points[i];
@@ -71,8 +71,8 @@ void Plotter<K>::phase3ThreadA(
                         {
                             // Re-encode line point to compensate for dropped entries in previous table
                             auto res = Encoding::LinePointToSquare(line_point);
-                            uint64_t x_new = (*final_positions)[table_index-1].read(res.first).value;
-                            uint64_t y_new = (*final_positions)[table_index-1].read(res.second).value;
+                            uint64_t x_new = (*final_positions)[table_index-1].get(res.first).getY();
+                            uint64_t y_new = (*final_positions)[table_index-1].get(res.second).getY();
                             assert(x_new <= res.first);
                             assert(y_new <= res.second);
                             line_point = Encoding::SquareToLinePoint(x_new, y_new);
@@ -114,10 +114,10 @@ void Plotter<K>::phase3ThreadA(
 
 		Park* p;
 		if (table_index == 0) {
-            p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDeltaTable1, kRValues[table_index]>(kEntriesPerPark);
+            p = new CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>(kEntriesPerPark);
         }
 		else {
-            p = new CompressedPark<K * 2, K, kStubMinusBits, kMaxAverageDelta, kRValues[table_index]>(kEntriesPerPark);
+            p = new CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>(kEntriesPerPark);
         }
         p->bind(output_buffer->data + start_offset + park_id * park_size_bytes);
 		p->addEntries(park_line_points);
@@ -143,17 +143,17 @@ void Plotter<K>::phase3ThreadA(
 	}
 }
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase3DoTable()
+void Plotter<K, num_rows>::phase3DoTable()
 {
     // Wait for the final positions table to be ready
     final_parks.emplace_back();
-    AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used = nullptr;
+    entries_used_type* current_entries_used = nullptr;
     if (table_index < 5)
     {
         phase2b_threads[table_index].join();
-        current_entries_used = &(entries_used[table_index]);
+        current_entries_used = &(entries_used->at(table_index));
     }
     final_table_begin_pointers[table_index] = bswap_64(*(output_buffer->insert_pos));
     cout << "Part A"<< (uint32_t)table_index;
@@ -164,12 +164,12 @@ void Plotter<K>::phase3DoTable()
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K>::phase3ThreadA<table_index>,
+                Plotter<K, num_rows>::phase3ThreadA<table_index>,
                 cpu_id,
                 &coordinator,
                 &(phase1_graph_parks[table_index]),
                 current_entries_used,
-                &(final_positions),
+                phase2_final_positions,
                 output_buffer,
                 &final_parks,
                 start_offset));
@@ -184,8 +184,8 @@ void Plotter<K>::phase3DoTable()
     delete buffers[table_index];
 }
 
-template<uint8_t K>
-void Plotter<K>::phase3()
+template<uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase3()
 {
     uint64_t phase_start_seconds = time(nullptr);
 	// Try to predict an upper bound to the final file size
@@ -203,7 +203,7 @@ void Plotter<K>::phase3()
     uint32_t size_C3 = EntrySizes::CalculateC3Size(K);
     predicted_file_size_bytes += (total_C1_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C2_entries + 1) * (Util::ByteAlign(K) / 8) + (total_C1_entries)*size_C3;
 
-    output_buffer = new Buffer(predicted_file_size_bytes*1.5, filename);
+    output_buffer = new Buffer(predicted_file_size_bytes<<1, filename);
     //output_buffer = new Buffer(predicted_file_size_bytes*1.5);
 
     // 19 bytes  - "Proof of Space Plot" (utf-8)

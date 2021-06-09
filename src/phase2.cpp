@@ -13,14 +13,14 @@
 using namespace std;
 
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase2ThreadA(
+void Plotter<K, num_rows>::phase2ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         vector<DeltaPark<line_point_delta_len_bits>*>* parks,
-        AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used,
-        AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* prev_entries_used
+        entries_used_type* current_entries_used,
+        entries_used_type* prev_entries_used
         )
 {
     PinToCpuid(cpu_id);
@@ -38,7 +38,7 @@ void Plotter<K>::phase2ThreadA(
 
 		for (uint64_t i = 0; i < line_points.size(); i++)
         {
-		    if ((table_index == 5) || (current_entries_used->read(parks->at(park_id)->start_pos + i).value))
+		    if ((table_index == 5) || (current_entries_used->get(parks->at(park_id)->start_pos + i).getY()))
             {
                 auto res = Encoding::LinePointToSquare(line_points[i]);
                 prev_entries_used->set(res.first, BooleanPackedEntry(true));
@@ -48,44 +48,44 @@ void Plotter<K>::phase2ThreadA(
 	}
 }
 
-template <uint8_t K>
-void Plotter<K>::phase2ThreadB(
-        AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* entries_used,
-        AtomicPackedArray<SimplePackedEntry<uint64_t,K>, max_entries_per_graph_table>* final_positions
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase2ThreadB(
+        entries_used_type* entries_used,
+        p2_final_positions_type* final_positions
 )
 {
     uint64_t new_pos = 0;
-    for (uint64_t i = 0; i < entries_used->size(); i++)
+    for (uint64_t i = 0; i < max_entries_per_graph_table; i++)
     {
-        final_positions->append(SimplePackedEntry<uint64_t,K>(new_pos));
-        new_pos += entries_used->read(i).value;
+        final_positions->set(i, PackedEntry<1, 1ULL << (K+1), 1>(new_pos));
+        new_pos += entries_used->get(i).getY();
     }
 }
 
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase2DoTable()
+void Plotter<K, num_rows>::phase2DoTable()
 {
-    entries_used[table_index-1].fill(BooleanPackedEntry(false));
+    entries_used->at(table_index-1).fill(BooleanPackedEntry(false));
     cout << "Part A"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
     vector<thread> threads;
-    AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table>* current_entries_used = nullptr;
+    entries_used_type * current_entries_used = nullptr;
     if(table_index != 5)
     {
-        current_entries_used = &(entries_used[table_index]);
+        current_entries_used = &(entries_used->at(table_index));
     }
     std::atomic<uint64_t> coordinator = 0;
-    for (uint32_t i = 0; i < cpu_ids.size(); i++)
+    for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K>::phase2ThreadA<table_index>,
-                cpu_ids[i],
+                Plotter<K, num_rows>::phase2ThreadA<table_index>,
+                cpu_id,
                 &coordinator,
                 &(phase1_graph_parks[table_index]),
                 current_entries_used,
-                &(entries_used[table_index-1])));
+                &(entries_used->at(table_index-1))));
     }
 
     for (auto &it: threads)
@@ -96,17 +96,17 @@ void Plotter<K>::phase2DoTable()
 
     // Start final position sum thread
     phase2b_threads[table_index-1] = thread(
-            Plotter<K>::phase2ThreadB,
-            &(entries_used[table_index-1]),
-            &(final_positions[table_index-1]));
+            Plotter<K, num_rows>::phase2ThreadB,
+            &(entries_used->at(table_index-1)),
+            &(phase2_final_positions->at(table_index - 1)));
 }
 
 
-template <uint8_t K>
-void Plotter<K>::phase2()
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase2()
 {
-    entries_used.resize(5);
-    final_positions.resize(5);
+    entries_used = new vector<entries_used_type>(5);
+    phase2_final_positions = new vector<p2_final_positions_type>(5);
     phase2b_threads.resize(5);
     // Start final position sum thread
     uint64_t phase_start_seconds = time(nullptr);
@@ -119,3 +119,4 @@ void Plotter<K>::phase2()
 }
 
 #include "explicit_templates.hpp"
+#include "packed_array.hpp"

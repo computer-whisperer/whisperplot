@@ -33,9 +33,11 @@ using namespace std;
 template<uint8_t K>
 void doPlot(const uint8_t* id_in, const uint8_t* memo_in, const uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
 {
-    auto res = new Plotter<K>(id_in, memo_in, memo_size_in, cpu_ids, filename);
+    auto res = new Plotter<K, 1ULL << 16>(id_in, memo_in, memo_size_in, cpu_ids, filename);
     res->phase1();
-    res->check();
+    res->check_table1();
+    res->find_many_proofs(100);
+    res->check_parks_integrity();
     res->phase2();
     res->phase3();
     res->phase4();

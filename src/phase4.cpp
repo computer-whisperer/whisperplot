@@ -7,8 +7,8 @@
 
 using namespace std;
 
-template <uint8_t K>
-void Plotter<K>::phase4()
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase4()
 {
     uint64_t phase_start_seconds = time(nullptr);
     uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;

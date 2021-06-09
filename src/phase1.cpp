@@ -14,32 +14,12 @@
 
 using namespace std;
 
-void assert_matching(uint64_t lout, uint64_t rout)
-{
-
-    int64_t bucket_id_lout = lout/kBC;
-    int64_t bucket_id_rout = rout/kBC;
-    assert(bucket_id_lout + 1 == bucket_id_rout);
-    int64_t b_id_l = (lout%kBC)/kC;
-    int64_t c_id_l = (lout%kBC)%kC;
-    int64_t b_id_r = (rout%kBC)/kC;
-    int64_t c_id_r = (rout%kBC)%kC;
-    int64_t m = (kB + b_id_r - b_id_l)%kB;
-    assert((uint64_t)m < (1UL<<kExtraBits));
-    int64_t a = c_id_r - c_id_l;
-    int64_t b = 2*m + (bucket_id_lout%2);
-    int64_t c = (b*b)%kC;
-    int64_t d = (kC + a)%kC;
-    assert(c == d);
-
-}
-
-template <uint8_t K>
-void Plotter<K>::phase1ThreadA(
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase1ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         const uint8_t* id,
-        Penguin<YCPackedEntry<K, -1>>* new_penguin
+        Penguin<YCPackedEntry<-1>>* new_penguin
 )
 {
     PinToCpuid(cpu_id);
@@ -60,7 +40,7 @@ void Plotter<K>::phase1ThreadA(
 
         for (uint64_t i = 0; i < batch_size; i++)
         {
-            YCPackedEntry<K, -1> entry;
+            YCPackedEntry<-1> entry;
             entry.setY(buff[i]);
             entry.c = x+i;
             new_penguin->addEntry(entry);
@@ -68,18 +48,24 @@ void Plotter<K>::phase1ThreadA(
     }
 }
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase1ThreadB(
+void Plotter<K, num_rows>::phase1ThreadB(
         uint32_t cpu_id,
+        const uint8_t* id,
         std::atomic<uint64_t> * coordinator,
+        p1_buckets_done_type<table_index-1> * bucket_left_done,
+        p1_buckets_done_type<table_index-1> * bucket_right_done,
         map<uint32_t, vector<uint64_t>> *new_entry_positions,
-        map<uint32_t, Penguin<YCPackedEntry<K, table_index - 1>> *> *prev_penguins,
-        Penguin<YCPackedEntry<K, table_index>> * new_yc_penguin,
-        Penguin<LinePointEntryUIDPackedEntry<K>> * new_line_point_penguin)
+        map<uint32_t, Penguin<YCPackedEntry<table_index - 1>> *> *prev_penguins,
+        Penguin<YCPackedEntry<table_index>> * new_yc_penguin,
+        Penguin<LinePointUIDPackedEntry<table_index>> * new_line_point_penguin)
 {
+    using old_yc = YCPackedEntry<table_index - 1>;
+    using new_yc = YCPackedEntry<table_index>;
+    using temp_yc = YCTempPackedEntry<table_index-1>;
     PinToCpuid(cpu_id);
-  //  F1Calculator f1(K, id);
+    F1Calculator f1(K, id);
     vector<vector<uint32_t>> right_map(kBC);
     for (auto& i : right_map) {
         i.clear();
@@ -88,18 +74,24 @@ void Plotter<K>::phase1ThreadB(
     FxCalculator fx(K, table_index+2);
 
     // These are BC buckets from the chia algo
-    constexpr uint32_t bc_buckets_per_sort_row = YCPackedEntry<K, table_index - 1>::num_bc_buckets_per_sort_row;
     constexpr uint32_t bc_bucket_num = (1ULL << (K+kExtraBits))/kBC;
-    constexpr uint64_t num_entries_per_bc_bucket = YCPackedEntry<K, table_index - 1>::sizes.num_entries_per_bc_bucket;
-    vector<PackedArray<YCPackedEntry<K, table_index - 1>, YCPackedEntry<K, table_index - 1>::sizes.num_entries_per_bc_bucket>> temp_buckets(bc_buckets_per_sort_row*2);
-    uint32_t latest_bc_bucket_loaded = 0;
-    vector<vector<uint32_t>> entry_positions(bc_buckets_per_sort_row*2);
+    constexpr uint32_t temp_buckets_needed = old_yc::row_divisor/kBC + 4;
+    constexpr uint32_t max_entries_per_bc_bucket = 350;
+
+    vector<PackedArray<temp_yc, max_entries_per_bc_bucket>> temp_buckets(temp_buckets_needed);
+    vector<uint32_t> temp_bucket_fill_states(temp_buckets_needed);
+    vector<vector<uint32_t>> entry_positions(temp_buckets_needed);
+
+    int32_t latest_bucket_started_load = -1;
+    int32_t latest_bucket_finished_load = -1;
+    int32_t latest_row_loaded = -1;
+
     for (auto & i : entry_positions)
     {
-        i.reserve(num_entries_per_bc_bucket);
+        i.reserve(max_entries_per_bc_bucket);
     }
 
-    constexpr uint32_t batchSize = bc_buckets_per_sort_row*32;
+    constexpr uint32_t batchSize = temp_buckets_needed*32;
 
     while (true)
     {
@@ -110,60 +102,120 @@ void Plotter<K>::phase1ThreadB(
         {
             if (bucket_id > bc_bucket_num-1)
                 break;
-            uint16_t parity = bucket_id % 2;
 
-            if (latest_bc_bucket_loaded <= bucket_id+1) {
-                // Load more buckets, starting at bc bucket sort_row+1
-                uint32_t row_id = (bucket_id + 1) / bc_buckets_per_sort_row;
-                // Clear the entry position lists for the incoming row
-                if (row_id % 2 == 0)
+
+
+            while (latest_bucket_finished_load < (int32_t)(bucket_id+1))
+            {
+                // Load next row
+                uint32_t row_id = latest_row_loaded + 1;
+
+                if (row_id >= num_rows)
                 {
-                    for (uint32_t i = 0; i < bc_buckets_per_sort_row; i++)
-                    {
-                        entry_positions[i].clear();
-                        temp_buckets[i].clear();
-                    }
+                    latest_bucket_finished_load = bucket_id+1;
+                    break;
                 }
-                else
+
+                uint64_t first_value_needed = bucket_id*kBC;
+                uint32_t first_row_needed = first_value_needed/old_yc::row_divisor;
+                if (row_id < first_row_needed)
                 {
-                    for (uint32_t i = bc_buckets_per_sort_row; i < bc_buckets_per_sort_row*2; i++)
-                    {
-                        entry_positions[i].clear();
-                        temp_buckets[i].clear();
-                    }
+                    row_id = first_row_needed;
                 }
-                // Load in next set of BC buckets
+
+                uint64_t first_value_contained = row_id*old_yc::row_divisor;
+                uint64_t first_bucket_needed = first_value_contained/kBC;
+
+                uint64_t last_value_contained = (row_id+1)*old_yc::row_divisor - 1;
+                uint64_t last_bucket_needed = last_value_contained/kBC;
+
+                uint64_t clear_start = latest_bucket_started_load+1;
+                if (clear_start < first_bucket_needed)
+                {
+                    clear_start = first_bucket_needed;
+                }
+
+                // Clear temp buckets we will need
+                for (uint32_t i = clear_start; i <= last_bucket_needed; i++)
+                {
+                    temp_bucket_fill_states[i%temp_buckets_needed] = 0;
+                    entry_positions[i%temp_buckets_needed].clear();
+                }
+                latest_bucket_started_load = last_bucket_needed;
+
+                // Load in the row
                 for (auto& [numa_node, penguin] : *prev_penguins)
                 {
                     for (uint32_t entry_id = 0; entry_id < penguin->getCountInRow(row_id); entry_id++)
                     {
                         auto entry = penguin->readEntry(row_id, entry_id);
                         uint32_t bucket_of_entry = entry.getY()/kBC;
-                        temp_buckets[bucket_of_entry%(bc_buckets_per_sort_row*2)].append(entry);
+                        uint32_t bucket_entry_id = temp_bucket_fill_states[bucket_of_entry%temp_buckets_needed]++;
+                        temp_yc temp_entry;
+                        temp_entry.setY(entry.getY());
+                        temp_entry.c = entry.c;
+                        temp_buckets[bucket_of_entry%temp_buckets_needed].set(bucket_entry_id, temp_entry);
+                        auto test_entry = temp_buckets[bucket_of_entry%temp_buckets_needed].get(bucket_entry_id);
+                        test_entry.row = bucket_of_entry;
+                        if (table_index == 0)
+                            assert(f1.CalculateF(Bits(test_entry.c, K)).GetValue() == test_entry.getY());
                         if (table_index > 0)
                         {
                             uint64_t uid = penguin->getUniqueIdentifier(row_id, entry_id);
                             uint32_t new_position = (*new_entry_positions)[numa_node][uid];
-                            entry_positions[bucket_of_entry%(bc_buckets_per_sort_row*2)].push_back(new_position);
+                            entry_positions[bucket_of_entry%temp_buckets_needed].push_back(new_position);
                         }
+                        assert(temp_bucket_ids[bucket_of_entry%temp_buckets_needed] == bucket_of_entry);
                     }
-
                 }
-                latest_bc_bucket_loaded += bc_buckets_per_sort_row;
+
+                latest_bucket_finished_load = (last_value_contained+1)/kBC - 1;
+                latest_row_loaded = row_id;
+
+                if (GetMaxY(table_index-1) <= last_value_contained)
+                {
+                    latest_bucket_finished_load = bc_bucket_num;
+                }
             }
-            for (auto& [numa_node, penguin] : *prev_penguins) {
-                penguin->popRow(bucket_id/ bc_buckets_per_sort_row);
-                penguin->popRow((bucket_id + 1) / bc_buckets_per_sort_row);
+
+            bucket_left_done->set(bucket_id, BooleanPackedEntry(true));
+            bucket_right_done->set(bucket_id+1, BooleanPackedEntry(true));
+
+            // Check all rows that contribute to either bucket_id and pop them if possible
+            uint64_t first_row_possible = (bucket_id*kBC)/old_yc::row_divisor;
+            uint64_t last_row_possible = ((bucket_id+2)*kBC - 1)/old_yc::row_divisor;
+            for (uint32_t row_id = first_row_possible; row_id <= last_row_possible; row_id++)
+            {
+                // Check if all buckets in this row are finished
+                uint64_t first_bucket_contained = (row_id*old_yc::row_divisor)/kBC;
+                uint64_t last_bucket_contained = ((row_id+1)*old_yc::row_divisor - 1)/kBC;
+                uint32_t i;
+                for (i = first_bucket_contained; i <= last_bucket_contained; i++)
+                {
+                    if (!bucket_left_done->get(i).getY() || !bucket_right_done->get(i).getY())
+                    {
+                        break;
+                    }
+                }
+                if (i > last_bucket_contained)
+                {
+                    // All checks passed, this row can be popped
+                    for (auto& [numa_node, penguin] : *prev_penguins) {
+                        penguin->popRow(row_id);
+                    }
+                }
             }
+
 
             // Process sort_row and sort_row + 1
+            uint16_t parity = bucket_id % 2;
             for (size_t yl : right_map_clean) {
                 right_map[yl].clear();
             }
             right_map_clean.clear();
-            for (size_t pos_R = 0; pos_R < temp_buckets[(bucket_id+1)%(bc_buckets_per_sort_row*2)].count; pos_R++) {
-                auto right_entry = temp_buckets[(bucket_id+1)%(bc_buckets_per_sort_row*2)].read(pos_R);
-                right_entry.sort_row = bucket_id / bc_buckets_per_sort_row;
+            for (size_t pos_R = 0; pos_R < temp_bucket_fill_states[(bucket_id+1)%temp_buckets_needed]; pos_R++) {
+                auto right_entry = temp_buckets[(bucket_id+1)%temp_buckets_needed].get(pos_R);
+                right_entry.row = bucket_id;
                 uint64_t r_y = right_entry.getY() % kBC;
                 if (right_map[r_y].empty())
                 {
@@ -172,14 +224,14 @@ void Plotter<K>::phase1ThreadB(
                 right_map[r_y].push_back(pos_R);
             }
 
-            for (size_t pos_L = 0; pos_L < temp_buckets[(bucket_id)%(bc_buckets_per_sort_row*2)].count; pos_L++) {
-                auto left_entry = temp_buckets[(bucket_id)%(bc_buckets_per_sort_row*2)].read(pos_L);
-                left_entry.sort_row = bucket_id / bc_buckets_per_sort_row;
+            for (size_t pos_L = 0; pos_L < temp_bucket_fill_states[(bucket_id)%temp_buckets_needed]; pos_L++) {
+                auto left_entry = temp_buckets[(bucket_id)%temp_buckets_needed].get(pos_L);
+                left_entry.row = bucket_id;
                 for (uint8_t i = 0; i < kExtraBitsPow; i++) {
                     uint16_t r_target = L_targets[parity][left_entry.getY()%kBC][i];
                     for (auto& pos_R : right_map[r_target]) {
-                        auto right_entry = temp_buckets[(bucket_id+1)%(bc_buckets_per_sort_row*2)].read(pos_R);
-                        right_entry.sort_row = (bucket_id+1) / bc_buckets_per_sort_row;
+                        auto right_entry = temp_buckets[(bucket_id+1)%temp_buckets_needed].get(pos_R);
+                        right_entry.row = bucket_id+1;
 
                         // Calculate the next F and dump a new entry into the bucket index for the next table
                         uint64_t c_len = kVectorLens[table_index + 2] * K;
@@ -188,7 +240,7 @@ void Plotter<K>::phase1ThreadB(
                                 Bits(left_entry.c, c_len),
                                 Bits(right_entry.c, c_len));
 
-                        YCPackedEntry<K, table_index> new_entry;
+                        new_yc new_entry;
 
                         if (table_index < 5) {
                             new_entry.setY(out.first.GetValue());
@@ -203,7 +255,7 @@ void Plotter<K>::phase1ThreadB(
                             new_entry.setY(out.first.Slice(0, K).GetValue());
                         }
                         uint64_t new_entry_id = new_yc_penguin->addEntry(new_entry);
-                        uint64_t sort_row = new_entry.sort_row;
+                        uint64_t sort_row = new_entry.row;
 
                         // Emit a new line point for sorting into the phase1 output buffer
                         uint64_t x, y;
@@ -211,19 +263,19 @@ void Plotter<K>::phase1ThreadB(
                         {
                             x = left_entry.c;
                             y = right_entry.c;
-                            assert_matching(left_entry.getY(), right_entry.getY());
                         }
                         else
                         {
-                            x = entry_positions[bucket_id%(bc_buckets_per_sort_row*2)][pos_L];
-                            y = entry_positions[(bucket_id+1)%(bc_buckets_per_sort_row*2)][pos_R];
+                            x = entry_positions[bucket_id%temp_buckets_needed][pos_L];
+                            y = entry_positions[(bucket_id+1)%temp_buckets_needed][pos_R];
                         }
-                        LinePointEntryUIDPackedEntry<K> line_point_entry;
-                        line_point_entry.setLinePoint(Encoding::SquareToLinePoint(x, y));
-                        line_point_entry.entry_uid = new_yc_penguin->getUniqueIdentifier(sort_row,
+                        LinePointUIDPackedEntry<table_index> line_point_entry;
+                        line_point_entry.setY(Encoding::SquareToLinePoint(x, y));
+                        line_point_entry.uid = new_yc_penguin->getUniqueIdentifier(sort_row,
                                                                                          new_entry_id);
-                        assert(line_point_entry.entry_uid < (1ULL << (K + 2)));
-                        new_line_point_penguin->addEntry(line_point_entry);
+                        assert(line_point_entry.uid < (1ULL << (K + 2)));
+                        uint32_t test_row_id = line_point_entry.row;
+                        uint32_t test_entry_id = new_line_point_penguin->addEntry(line_point_entry);
                     }
                 }
 
@@ -234,29 +286,30 @@ void Plotter<K>::phase1ThreadB(
     }
 }
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-void Plotter<K>::phase1ThreadC(
+void Plotter<K, num_rows>::phase1ThreadC(
         uint32_t cpu_id,
+        const uint8_t* id,
         std::atomic<uint64_t>* coordinator,
         map<uint32_t, vector<uint64_t>> *new_entry_positions,
-        map<uint32_t, Penguin<LinePointEntryUIDPackedEntry<K>> *> line_point_bucket_indexes,
+        map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>> *> line_point_bucket_indexes,
         vector<DeltaPark<line_point_delta_len_bits> *> *parks,
         Buffer* buffer)
 {
     PinToCpuid(cpu_id);
-   // F1Calculator f1(K, id);
-    vector<pair<uint32_t, LinePointEntryUIDPackedEntry<K>>> entries;
-    entries.reserve(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
+    F1Calculator f1(K, id);
+    vector<pair<uint32_t, LinePointUIDPackedEntry<table_index>>> entries;
+    entries.reserve(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     vector<uint128_t> line_points;
-    line_points.reserve(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
-    vector<uint128_t> line_points_check(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
+    line_points.reserve(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
+    vector<uint128_t> line_points_check(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     uint64_t last_offset_computed = 0;
     uint64_t total_entries_so_far = 0;
     while (true)
     {
         uint64_t row_id = coordinator->fetch_add(1);
-        if (row_id >= LinePointEntryUIDPackedEntry<K>::num_sort_rows)
+        if (row_id >= num_rows)
             break;
 
         while (row_id > last_offset_computed)
@@ -277,16 +330,15 @@ void Plotter<K>::phase1ThreadC(
             for (uint32_t i = 0; i < entries_in_numa; i++)
             {
                 auto entry = penguin->readEntry(row_id, i);
-                entries.push_back(pair<uint32_t, LinePointEntryUIDPackedEntry<K>>(numa_node,entry));
+                entries.push_back(pair<uint32_t, LinePointUIDPackedEntry<table_index>>(numa_node,entry));
             }
             num_entries += entries_in_numa;
             //penguin->popRow(row_id);
         }
-        assert(num_entries < LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
 
 // Sort the bucket
         struct {
-            bool operator()(pair<uint32_t, LinePointEntryUIDPackedEntry<K>> a, pair<uint32_t, LinePointEntryUIDPackedEntry<K>> b) const { return a.second.getLinePoint() < b.second.getLinePoint(); }
+            bool operator()(pair<uint32_t, LinePointUIDPackedEntry<table_index>> a, pair<uint32_t, LinePointUIDPackedEntry<table_index>> b) const { return a.second.getY() < b.second.getY(); }
         } customLess;
         sort(entries.begin(), entries.begin()+num_entries, customLess);
 // We have a sorted entries list! Emit to output buffer and record new positions
@@ -297,56 +349,40 @@ void Plotter<K>::phase1ThreadC(
         line_points.clear();
         for (uint64_t i = 0; i < num_entries; i++)
         {
-            line_points.push_back(entries[i].second.getLinePoint());
-            assert(entries[i].second.entry_uid < (1ULL<<(K+2)));
-            (*new_entry_positions)[entries[i].first][entries[i].second.entry_uid] = i + total_entries_so_far;
+            line_points.push_back(entries[i].second.getY());
+            assert(entries[i].second.uid < (1ULL<<(K+2)));
+            (*new_entry_positions)[entries[i].first][entries[i].second.uid] = i + total_entries_so_far;
         }
         new_park->addEntries(line_points);
         (*parks)[row_id] = new_park;
-/*
+
         // Check that we can recover the data
-        new_park->readEntries(line_points_check.data());
+        new_park->readEntries(line_points_check);
         for (uint32_t i = 0; i < num_entries; i++)
         {
             assert(line_points[i] == line_points_check[i]);
         }
 
-        if (table_index == 0)
-        {
-            for (uint32_t i = 0; i < num_entries; i++)
-            {
-                auto res = Encoding::LinePointToSquare(line_points[i]);
-
-                Bits x = f1.CalculateF(Bits(res.first, K));
-                Bits y = f1.CalculateF(Bits(res.second, K));
-                if (x.GetValue() > y.GetValue())
-                {
-                    swap(x, y);
-                }
-                assert_matching(x.GetValue(), y.GetValue());
-            }
-        }
-        */
     }
 }
 
-template <uint8_t K>
-void Plotter<K>::phase1ThreadD(
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase1ThreadD(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         map<uint32_t, vector<uint64_t>> *new_entry_positions,
-        std::map<uint32_t, Penguin<YCPackedEntry<K, 5>>*> line_point_penguins,
+        std::map<uint32_t, Penguin<YCPackedEntry<5>>*> line_point_penguins,
         vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
         Buffer* buffer)
 {
     PinToCpuid(cpu_id);
-    vector<YCPackedEntry<K, 5>> entries(YCPackedEntry<K, 5>::max_entries_per_sort_row);
-    vector<uint128_t> line_points(YCPackedEntry<K, 5>::max_entries_per_sort_row);
+    vector<YCPackedEntry<5>> entries(YCPackedEntry<5>::max_entries_per_row);
+    vector<uint128_t> line_points(YCPackedEntry<5>::max_entries_per_row);
     uint64_t total_entries_so_far = 0;
     while (true)
     {
         uint64_t row_id = coordinator->fetch_add(1);
-        if (row_id >= YCPackedEntry<K, 5>::num_sort_rows)
+        if (row_id >= num_rows)
             break;
 
         for (auto& [numa_node, penguin] : line_point_penguins) {
@@ -362,8 +398,7 @@ void Plotter<K>::phase1ThreadD(
             {
                 uint64_t new_pos = (*new_entry_positions)[numa_node][penguin->getUniqueIdentifier(row_id, i)];
                 auto e = penguin->readEntry(row_id, i);
-
-                e.setY(e.getY()<<(K+1) | new_pos);
+                e.setYtemp(e.getY()<<(K+1) | new_pos);
                 entries.push_back(e);
             }
             num_entries += entries_in_numa;
@@ -373,7 +408,7 @@ void Plotter<K>::phase1ThreadD(
 
 // Sort the bucket
         struct {
-            bool operator()(YCPackedEntry<K, 5> a, YCPackedEntry<K, 5> b) const { return a.getY() < b.getY(); }
+            bool operator()(YCPackedEntry<5> a, YCPackedEntry<5> b) const { return a.getY() < b.getY(); }
         } customLess;
         sort(entries.begin(), entries.begin()+num_entries, customLess);
 
@@ -391,20 +426,29 @@ void Plotter<K>::phase1ThreadD(
     }
 }
 
-template <uint8_t K>
+template <uint8_t K, uint32_t num_rows, int8_t table_index>
+using test_type = typename Plotter<K, num_rows>::template YCPackedEntry<table_index>;
+
+template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
-map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable(
-        map<uint32_t, Penguin<YCPackedEntry<K, table_index - 1>>*> prev_bucket_indexes)
+map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows>::phase1DoTable(
+        map<uint32_t, Penguin<YCPackedEntry<table_index-1>>*> prev_bucket_indexes)
 {
-    map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> next_bucket_indexes;
-    map<uint32_t, Penguin<LinePointEntryUIDPackedEntry<K>>*> new_line_point_bucket_indexes;
+    map<uint32_t, Penguin<YCPackedEntry<table_index>>*> next_bucket_indexes;
+    map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>>*> new_line_point_bucket_indexes;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
         d_new_entry_positions[numa_node].resize((1ULL<<(K+2)));
-        next_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<K, table_index>>();
-        next_bucket_indexes[numa_node]->pops_required_per_row = 2*YCPackedEntry<K, table_index>::num_bc_buckets_per_sort_row;
-        new_line_point_bucket_indexes[numa_node] = new Penguin<LinePointEntryUIDPackedEntry<K>>();
+        next_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<table_index>>();
+        new_line_point_bucket_indexes[numa_node] = new Penguin<LinePointUIDPackedEntry<table_index>>();
     }
+
+    auto * bucket_left_done = new p1_buckets_done_type<table_index-1>();
+    bucket_left_done->fill(BooleanPackedEntry(false));
+    auto * bucket_right_done = new p1_buckets_done_type<table_index-1>();
+    bucket_right_done->fill(BooleanPackedEntry(false));
+    bucket_left_done->set(0, BooleanPackedEntry(true));
+    bucket_right_done->set(GetMaxY(table_index)/kBC - 1, BooleanPackedEntry(true));
 
     cout << "Part B"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
@@ -414,9 +458,12 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
     {
         uint32_t numa_node = numa_node_of_cpu(cpu_id);
         threads.push_back(thread(
-                Plotter<K>::phase1ThreadB<table_index>,
+                Plotter<K, num_rows>::phase1ThreadB<table_index>,
                 cpu_id,
+                id,
                 &coordinator,
+                bucket_left_done,
+                bucket_right_done,
                 &d_new_entry_positions,
                 &prev_bucket_indexes,
                 next_bucket_indexes[numa_node],
@@ -428,6 +475,9 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
         it.join();
     }
 
+    delete bucket_left_done;
+    delete bucket_right_done;
+
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids)) {
         delete prev_bucket_indexes[numa_node];
     }
@@ -437,9 +487,9 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
     //new_line_point_bucket_index->SumBucketOffsets();
 
 // Setup the new park list and buffer
-    DeltaPark<line_point_delta_len_bits> test_park(LinePointEntryUIDPackedEntry<K>::max_entries_per_sort_row);
-    buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointEntryUIDPackedEntry<K>::num_sort_rows));
-    phase1_graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointEntryUIDPackedEntry<K>::num_sort_rows));
+    DeltaPark<line_point_delta_len_bits> test_park(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
+    buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointUIDPackedEntry<table_index>::num_rows_v));
+    phase1_graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointUIDPackedEntry<table_index>::num_rows_v));
 
     coordinator = 0;
     cout << "Part C"<< (uint32_t)table_index;
@@ -448,8 +498,9 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K>::phase1ThreadC<table_index>,
+                Plotter<K, num_rows>::phase1ThreadC<table_index>,
                 cpu_id,
+                id,
                 &coordinator,
                 &d_new_entry_positions,
                 new_line_point_bucket_indexes,
@@ -470,18 +521,17 @@ map<uint32_t, Penguin<YCPackedEntry<K, table_index>>*> Plotter<K>::phase1DoTable
 }
 
 
-template <uint8_t K>
-void Plotter<K>::phase1()
+template <uint8_t K, uint32_t num_rows>
+void Plotter<K, num_rows>::phase1()
 {
     load_tables();
 
     uint64_t phase_start_seconds = time(nullptr);
 
-    map<uint32_t, Penguin<YCPackedEntry<K, -1>>*> first_bucket_indexes;
+    map<uint32_t, Penguin<YCPackedEntry<-1>>*> first_bucket_indexes;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        first_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<K, -1>>();
-        first_bucket_indexes[numa_node]->pops_required_per_row = 2*YCPackedEntry<K, -1>::num_bc_buckets_per_sort_row;
+        first_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<-1>>();
     }
 
     cout << "Part A";
@@ -492,7 +542,7 @@ void Plotter<K>::phase1()
     {
         uint32_t numa_node = numa_node_of_cpu(cpu_id);
         threads.push_back(thread(
-                Plotter<K>::phase1ThreadA,
+                Plotter<K, num_rows>::phase1ThreadA,
                 cpu_id,
                 &coordinator,
                 id,
@@ -512,10 +562,9 @@ void Plotter<K>::phase1()
     auto i4 = phase1DoTable<4>(i3);
     auto i5 = phase1DoTable<5>(i4);
 
-    DeltaPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<K, 5>::max_entries_per_sort_row);
-    buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<K, 5>::num_sort_rows));
-    phase1_final_parks.resize(YCPackedEntry<K, 5>::num_sort_rows);
-
+    DeltaPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<5>::max_entries_per_row);
+    buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<5>::num_rows_v));
+    phase1_final_parks.resize(YCPackedEntry<5>::num_rows_v);
 
 
     cout << "Part D";
@@ -525,7 +574,7 @@ void Plotter<K>::phase1()
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K>::phase1ThreadD,
+                Plotter<K, num_rows>::phase1ThreadD,
                 cpu_id,
                 &coordinator,
                 &d_new_entry_positions,
@@ -541,141 +590,5 @@ void Plotter<K>::phase1()
     cout << "Phase 1 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 }
 
-
-template <uint8_t K>
-void Plotter<K>::check()
-{
-    // Check that all matching conditions from the first table actually work
-	F1Calculator f1(K, id);
-	/*
-    for (auto& park : phase1_graph_parks[0])
-    {
-        vector<uint128_t> line_points(park->size());
-        park->readEntries(line_points);
-        for (auto& line_point : line_points)
-        {
-            auto res = Encoding::LinePointToSquare(line_point);
-
-            Bits x = f1.CalculateF(Bits(res.first, K));
-            Bits y = f1.CalculateF(Bits(res.second, K));
-            if (x.GetValue() > y.GetValue())
-            {
-                swap(x, y);
-            }
-            assert_matching(x.GetValue(), y.GetValue());
-        }
-    }
-    */
-	// Test that we can draw good proofs from this
-	uint64_t challenge = 0x4819;
-	challenge = challenge%(1ULL<<K);
-	uint64_t i;
-	cout << "Looking for : " << challenge << endl;
-    uint64_t pos;
-    bool found = false;
-    for (auto& park : phase1_final_parks)
-    {
-        vector<uint128_t> line_points(park->size());
-        park->readEntries(line_points);
-        for (auto& line_point : line_points)
-        {
-            pos = line_point&((1ULL << (K+1))-1);
-            uint64_t y = line_point>>(K+1);
-            if (y == challenge) {
-                found = true;
-                break;
-            }
-        }
-	}
-	if (found)
-	{
-		cout << "Got inputs: ";
-		vector<uint64_t> x(64);
-		for (uint32_t j = 0; j < 64; j++)
-		{
-			uint64_t next_pos = pos;
-			uint32_t l;
-			for (l = 5; l < 6; l--)
-			{
-				// Find next_pos
-				uint64_t entries_so_far = 0;
-                for (auto& park : phase1_graph_parks[l])
-                {
-                    entries_so_far += park->size();
-                    if (next_pos < entries_so_far)
-                    {
-                        // pos is in this park
-                        vector<uint128_t> line_points(park->size());
-                        park->readEntries(line_points);
-                        uint128_t line_point = line_points[park->size() - (entries_so_far - next_pos)];
-                        auto res = Encoding::LinePointToSquare(line_point);
-                        uint8_t mask = 1ULL<<(l);
-                        if (j & mask)
-                        {
-                            next_pos = res.first;
-                        }
-                        else
-                        {
-                            next_pos = res.second;
-                        }
-                        break;
-                    }
-                }
-			}
-			x[j] = next_pos;
-			cout << x[j];
-			if (j < 63)
-			{
-				cout << ", ";
-			}
-		}
-		cout << endl;
-		// Check for matching conditions and re-combine
-		vector<Bits> input_collations;
-		vector<Bits> input_fs;
-		for (uint32_t fi = 1; fi <= 7; fi++)
-		{
-			vector<Bits> output_fs;
-			vector<Bits> output_collations;
-			if (fi == 1)
-			{
-				for (unsigned long i : x)
-				{
-					Bits b = Bits(i, K);
-					output_collations.push_back(b);
-					output_fs.push_back(f1.CalculateF(b));
-				}
-			}
-			else
-			{
-				FxCalculator fx(K, fi);
-				for (i = 0; i < input_collations.size(); i += 2)
-				{
-				    // Swap inputs if needed
-				    auto yl = input_fs[i];
-				    auto yr = input_fs[i+1];
-                    auto cl = input_collations[i];
-                    auto cr = input_collations[i+1];
-				    if (yl.GetValue() > yr.GetValue())
-                    {
-				        swap(yl, yr);
-                        swap(cl, cr);
-                    }
-				    assert_matching(yl.GetValue(), yr.GetValue());
-					auto out = fx.CalculateBucket(yl, cl, cr);
-					output_fs.push_back(out.first);
-					output_collations.push_back(out.second);
-				}
-			}
-			input_collations = output_collations;
-			input_fs = output_fs;
-		}
-		cout << "Result of tree: f7(...) = " << input_fs[0].Slice(0, K).GetValue() << endl;
-	}
-	else
-	{
-		cout << "Could not find " << challenge << " in table 7." << endl;
-	}
-}
-
 #include "explicit_templates.hpp"
+#include "packed_array.hpp"
