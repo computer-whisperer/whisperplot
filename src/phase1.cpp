@@ -38,7 +38,7 @@ void Plotter<K, num_rows>::phase1ThreadA(
 
         f1.CalculateBuckets(x, batch_size, buff.data());
 
-        for (uint64_t i = 0; i < batch_size; i++)
+         for (uint64_t i = 0; i < batch_size; i++)
         {
             YCPackedEntry<-1> entry;
             entry.setY(buff[i]);
@@ -158,14 +158,13 @@ void Plotter<K, num_rows>::phase1ThreadB(
                         auto test_entry = temp_buckets[bucket_of_entry%temp_buckets_needed].get(bucket_entry_id);
                         test_entry.row = bucket_of_entry;
                         if (table_index == 0)
-                            assert(f1.CalculateF(Bits(test_entry.c, K)).GetValue() == test_entry.getY());
+                            assert(f1.CalculateF(Bits(entry.c, K)).GetValue() == entry.getY());
                         if (table_index > 0)
                         {
                             uint64_t uid = penguin->getUniqueIdentifier(row_id, entry_id);
                             uint32_t new_position = (*new_entry_positions)[numa_node][uid];
                             entry_positions[bucket_of_entry%temp_buckets_needed].push_back(new_position);
                         }
-                        assert(temp_bucket_ids[bucket_of_entry%temp_buckets_needed] == bucket_of_entry);
                     }
                 }
 
@@ -379,15 +378,22 @@ void Plotter<K, num_rows>::phase1ThreadD(
     vector<YCPackedEntry<5>> entries(YCPackedEntry<5>::max_entries_per_row);
     vector<uint128_t> line_points(YCPackedEntry<5>::max_entries_per_row);
     uint64_t total_entries_so_far = 0;
+    uint64_t last_offset_computed = 0;
     while (true)
     {
         uint64_t row_id = coordinator->fetch_add(1);
         if (row_id >= num_rows)
             break;
 
-        for (auto& [numa_node, penguin] : line_point_penguins) {
-            total_entries_so_far += penguin->getCountInRow(row_id);
+
+        while (row_id > last_offset_computed)
+        {
+            for (auto& [numa_node, penguin] : line_point_penguins) {
+                total_entries_so_far += penguin->getCountInRow(last_offset_computed);
+            }
+            last_offset_computed++;
         }
+
 // Sort all entries in this bucket
         entries.clear();
         uint64_t num_entries = 0;
@@ -402,7 +408,7 @@ void Plotter<K, num_rows>::phase1ThreadD(
                 entries.push_back(e);
             }
             num_entries += entries_in_numa;
-            penguin->popRow(row_id);
+            //penguin->popRow(row_id);
         }
         //assert(num_entries < YCPackedEntry<K, 5>::max_entries_per_sort_row);
 
@@ -414,7 +420,7 @@ void Plotter<K, num_rows>::phase1ThreadD(
 
 // We have a sorted entries list! Emit to output buffer
         auto new_park = new DeltaPark<finaltable_y_delta_len_bits>(num_entries);
-        new_park->start_pos = total_entries_so_far - num_entries;
+        new_park->start_pos = total_entries_so_far;
         uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
         for (uint32_t i = 0; i < num_entries; i++)
@@ -566,6 +572,15 @@ void Plotter<K, num_rows>::phase1()
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<5>::num_rows_v));
     phase1_final_parks.resize(YCPackedEntry<5>::num_rows_v);
 
+    uint64_t num_final_matches = 0;
+    for (auto& [numa_node, penguin] : i5)
+    {
+        for (uint64_t row_id = 0; row_id < num_rows; row_id++)
+        {
+            num_final_matches += penguin->getCountInRow(row_id);
+        }
+    }
+    cout << "Entries in final penguin: " << num_final_matches << endl;
 
     cout << "Part D";
     part_start_seconds = time(nullptr);
@@ -588,6 +603,9 @@ void Plotter<K, num_rows>::phase1()
     }
     cout << " (" << time(nullptr) - part_start_seconds << "s)" << endl;
     cout << "Phase 1 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
+
+    num_final_matches = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
+    cout << "Entries in final parks: " << num_final_matches << endl;
 }
 
 #include "explicit_templates.hpp"

@@ -32,7 +32,7 @@ void Plotter<K, num_rows>::phase3ThreadA(
 	{
 		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
 
-		uint32_t park_id = (*coordinator)++;
+		uint32_t park_id = coordinator->fetch_add(1);
 		// Output everything for this park id
 
 		uint64_t park_starting_pos = kEntriesPerPark*park_id;
@@ -114,13 +114,21 @@ void Plotter<K, num_rows>::phase3ThreadA(
 
 		Park* p;
 		if (table_index == 0) {
-            p = new CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>(kEntriesPerPark);
+            using cp = CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>;
+            cp* p2 = new cp(kEntriesPerPark);
+            assert(p2->GetSpaceNeeded() == park_size_bytes);
+            p = p2;
         }
 		else {
-            p = new CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>(kEntriesPerPark);
+		    using cp = CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>;
+            cp* p2 = new cp(kEntriesPerPark);
+            assert(p2->GetSpaceNeeded() == park_size_bytes);
+            p = p2;
         }
         p->bind(output_buffer->data + start_offset + park_id * park_size_bytes);
 		p->addEntries(park_line_points);
+
+
 
 		// Test stuff here
 		/*
@@ -156,7 +164,7 @@ void Plotter<K, num_rows>::phase3DoTable()
         current_entries_used = &(entries_used->at(table_index));
     }
     final_table_begin_pointers[table_index] = bswap_64(*(output_buffer->insert_pos));
-    cout << "Part A"<< (uint32_t)table_index;
+    cout << "Part A" << (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
     vector<thread> threads;
     std::atomic<uint64_t> coordinator = 0;
@@ -223,9 +231,7 @@ void Plotter<K, num_rows>::phase3()
     *(uint16_t*)(output_buffer->data + output_buffer->GetInsertionOffset(2)) = bswap_16(memo_size);
     output_buffer->InsertData((void*)memo, memo_size);
 
-    uint8_t pointers[10 * 8];
-    uint32_t pointers_offset = output_buffer->InsertData(pointers, sizeof(pointers));
-    final_table_begin_pointers = (uint64_t*)(output_buffer->data + pointers_offset);
+    pointer_table_offset = output_buffer->InsertData(final_table_begin_pointers, sizeof(final_table_begin_pointers));
 
     phase3DoTable<0>();
     phase3DoTable<1>();

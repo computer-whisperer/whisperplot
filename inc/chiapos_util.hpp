@@ -65,6 +65,10 @@ inline uint16_t bswap_16(uint16_t x) { return __builtin_bswap16(x); }
 inline uint32_t bswap_32(uint32_t x) { return __builtin_bswap32(x); }
 inline uint64_t bswap_64(uint64_t x) { return __builtin_bswap64(x); }
 
+inline uint128_t bswap_128(uint128_t x) {
+    return bswap_64(x>>64) | (((uint128_t)bswap_64(x))<<64);
+}
+
 #else
 #error "unknown compiler, don't know how to swap bytes"
 #endif

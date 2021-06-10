@@ -33,15 +33,14 @@ using namespace std;
 template<uint8_t K>
 void doPlot(const uint8_t* id_in, const uint8_t* memo_in, const uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
 {
-    auto res = new Plotter<K, 1ULL << 16>(id_in, memo_in, memo_size_in, cpu_ids, filename);
+    auto res = new Plotter<K, 1ULL << 8>(id_in, memo_in, memo_size_in, cpu_ids, filename);
     res->phase1();
-    res->check_table1();
-    res->find_many_proofs(100);
-    res->check_parks_integrity();
+    //res->check_table1();
+    //res->find_many_proofs(100);
+    //res->check_parks_integrity();
     res->phase2();
     res->phase3();
     res->phase4();
-    cout << res->phase1_final_parks.size() << endl;
 }
 
 uint8_t hex_lookup[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -172,6 +171,12 @@ int main(int argc, char *argv[]) {
 
 
     string final_filename = filesystem::path(finaldir) / filesystem::path(filename);
+
+    for (auto &R : kRValues)
+    {
+        Encoding::ANSBuildCache(R);
+    }
+    Encoding::ANSBuildCache(kC3R);
 
     switch (k)
     {

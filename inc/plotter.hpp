@@ -71,11 +71,36 @@ public:
         using parent = PackedEntry<num_rows, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>;
     public:
         static constexpr uint64_t c_len_bits = GetCLen(table_index);
+
+        struct packed_type {
+            uint32_t y : parent::trimmed_y_len_bits;
+            uint64_t c : c_len_bits;
+        };
+
         static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + c_len_bits;
+        //static constexpr uint64_t len_bits = sizeof(packed_type)*8;
         uint128_t c;
         inline void pack(uint8_t * dest, uint64_t offset) override
         {
             assert(this->y < GetMaxY(table_index)+1);
+            /*
+            struct packed_type temp;
+            temp.y = this->y;
+            temp.c = c;
+            memcpy(dest + offset/8, &temp, sizeof(temp));
+             */
+
+            /*
+
+            auto packed_dat = (struct packed_type*)dest;
+            packed_dat->y = this->y;
+            packed_dat->c = c;*/
+/*
+            dest += offset/8;
+            uint128_t temp = this->y | (c << parent::trimmed_y_len_bits);
+            temp = bswap_128(temp);
+            memcpy(dest, &temp, (len_bits+7)/8);
+            */
             std::span<uint8_t> s{dest, (offset + len_bits + 7)/8};
             if (parent::trimmed_y_len_bits)
             {
@@ -86,10 +111,32 @@ public:
                 assert(c < (((uint128_t)(1ULL)) << c_len_bits));
                 bitpacker::insert(s, offset + parent::trimmed_y_len_bits, c_len_bits,  c);
             }
+
         }
 
         inline void unpack(uint8_t * src, uint64_t offset) override
         {
+            /*
+            struct packed_type temp;
+            memcpy(&temp, src + offset/8, sizeof(temp));
+            this->y = temp.y;
+            c = temp.c;
+             */
+            /*
+            src += offset/8;
+            auto packed_dat = (struct packed_type*)src;
+            this->y = packed_dat->y;
+            c = packed_dat->c;
+*/
+            /*
+            src += offset/8;
+            uint128_t temp = 0;
+            memcpy(&temp, src, (len_bits+7)/8);
+            temp = bswap_128(temp);
+            this->y = temp % parent::row_divisor;
+            c = temp >> parent::trimmed_y_len_bits;
+            // = this->y | (c << parent::trimmed_y_len_bits);*/
+
             std::span<uint8_t> s{src, (offset + len_bits + 7)/8};
             if (parent::trimmed_y_len_bits)
             {
@@ -99,6 +146,7 @@ public:
             {
                 c = bitpacker::extract<uint128_t>(s, offset + parent::trimmed_y_len_bits, c_len_bits);
             }
+
         }
     };
 
@@ -222,7 +270,8 @@ private:
     std::map<uint32_t, std::vector<uint64_t>> d_new_entry_positions;
     std::vector<entries_used_type>* entries_used;
     std::vector<p2_final_positions_type>* phase2_final_positions;
-    uint64_t * final_table_begin_pointers;
+    uint64_t final_table_begin_pointers[10];
+    uint64_t pointer_table_offset;
     std::vector<std::vector<Park*>> final_parks;
 
     static void phase1ThreadA(

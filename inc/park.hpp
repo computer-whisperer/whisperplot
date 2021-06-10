@@ -72,10 +72,10 @@ public:
     }
 };
 
-template <uint32_t value_len, uint32_t delta_len, uint32_t stub_minus_bits, uint32_t max_average_delta_times_100, uint32_t R_times_100>
+template <uint32_t value_len_bits, uint32_t delta_len, uint32_t stub_minus_bits, uint32_t max_average_delta_times_100, uint32_t R_times_100>
 class CompressedPark : public Park {
-    static constexpr float R = ((float)R_times_100)/100;
-    static constexpr float max_average_delta = ((float)max_average_delta_times_100)/100;
+    static constexpr double R = ((double)R_times_100)/100;
+    static constexpr double max_average_delta = ((double)max_average_delta_times_100)/100;
 
     uint32_t getStubsSize()
     {
@@ -92,7 +92,7 @@ public:
 
     inline uint64_t GetSpaceNeeded()
     {
-        return value_len + getStubsSize() + getMaxDeltasSize();
+        return (value_len_bits+7)/8 + getStubsSize() + getMaxDeltasSize();
     }
 
     inline void addEntries(std::vector<uint128_t>& src) override
@@ -124,9 +124,9 @@ public:
         uint8_t * dest = data;
 
         // First entry is static
-        uint128_t first_line_point = start_value << (128 - value_len);
+        uint128_t first_line_point = start_value << (128 - value_len_bits);
         Util::IntTo16Bytes(dest, first_line_point);
-        dest += (value_len+7)/8;
+        dest += (value_len_bits+7)/8;
 
         // We use ParkBits instead of Bits since it allows storing more data
         ParkBits park_stubs_bits;
@@ -165,8 +165,8 @@ public:
     {
         // This is the checkpoint at the beginning of the park
         uint8_t * src = data;
-        dest[0] = Util::SliceInt128FromBytes(data, 0, value_len);
-        src += (value_len+7)/8;
+        dest[0] = Util::SliceInt128FromBytes(data, 0, value_len_bits);
+        src += (value_len_bits+7)/8;
 
         // Reads EPP stubs
         auto* stubs_bin = src;

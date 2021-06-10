@@ -13,6 +13,7 @@ void Plotter<K, num_rows>::phase4()
     uint64_t phase_start_seconds = time(nullptr);
     uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;
     uint64_t num_entries = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
+    cout << "Entries in final table: " << num_entries << endl;
     uint64_t number_of_p7_parks = (num_entries + kEntriesPerPark-1)/kEntriesPerPark;
 
     uint64_t begin_byte_C1 = bswap_64(final_table_begin_pointers[6]) + number_of_p7_parks * P7_park_size;
@@ -179,6 +180,8 @@ void Plotter<K, num_rows>::phase4()
     }
     */
     delete buffers[6];
+
+    memcpy(output_buffer->data + pointer_table_offset, final_table_begin_pointers, sizeof(final_table_begin_pointers));
 
     std::cout << "\tFinal table pointers:" << std::endl << std::hex;
 
