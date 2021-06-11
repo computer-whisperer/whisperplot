@@ -5,7 +5,7 @@
 #ifndef WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 #define WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 
-constexpr uint32_t test_num_rows = 1ULL << 8;
+constexpr uint32_t test_num_rows = 1ULL << 16;
 
 template class Plotter<18, test_num_rows>;
 template class Plotter<22, test_num_rows>;

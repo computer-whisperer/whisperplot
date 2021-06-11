@@ -256,6 +256,8 @@ public:
     using p2_final_positions_type = PackedArray<PackedEntry<1, 1ULL << (K+1), 1>, max_entries_per_graph_table>;
     using entries_used_type = AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table, 1>;
 
+    using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(K+1)), 1>, (1ULL<<(K+1)), 8>;
+
     template <int8_t table_index>
     using p1_buckets_done_type = AtomicPackedArray<BooleanPackedEntry, GetMaxY(table_index)/kBC + 1, 1>;
 
@@ -267,7 +269,7 @@ private:
     uint32_t memo_size;
     std::vector<std::thread> phase2b_threads;
     std::vector<uint32_t> cpu_ids;
-    std::map<uint32_t, std::vector<uint64_t>> d_new_entry_positions;
+    std::map<uint32_t, phase1_new_positions_type*> phase1_new_entry_positions;
     std::vector<entries_used_type>* entries_used;
     std::vector<p2_final_positions_type>* phase2_final_positions;
     uint64_t final_table_begin_pointers[10];
@@ -288,7 +290,7 @@ private:
             std::atomic<uint64_t>* coordinator,
             p1_buckets_done_type<table_index-1> * bucket_left_done,
             p1_buckets_done_type<table_index-1> * bucket_right_done,
-            std::map<uint32_t, std::vector<uint64_t>>* new_entry_positions,
+            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
             std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>>*>* prev_penguins,
             Penguin<YCPackedEntry<table_index>>* new_yc_penguin,
             Penguin<LinePointUIDPackedEntry<table_index>>* new_line_point_penguin);
@@ -298,7 +300,7 @@ private:
             uint32_t cpu_id,
             const uint8_t* id,
             std::atomic<uint64_t>* coordinator,
-            std::map<uint32_t, std::vector<uint64_t>> * new_entry_positions,
+            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
             std::map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>>*> line_point_bucket_index,
             std::vector<DeltaPark<line_point_delta_len_bits> *> *parks,
             Buffer* buffer
@@ -307,7 +309,7 @@ private:
     static void phase1ThreadD(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::map<uint32_t, std::vector<uint64_t>> * new_entry_positions,
+            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
             std::map<uint32_t, Penguin<YCPackedEntry<5>>*> line_point_penguins,
             std::vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
             Buffer* buffer
