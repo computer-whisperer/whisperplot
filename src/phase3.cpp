@@ -17,7 +17,7 @@ template <int8_t table_index>
 void Plotter<K, num_rows>::phase3ThreadA(
         uint32_t cpu_id,
         atomic<uint64_t>* coordinator,
-        vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
+        vector<Park*>* temporary_parks,
         entries_used_type* entries_used,
         vector<p2_final_positions_type>* final_positions,
         Buffer* output_buffer,

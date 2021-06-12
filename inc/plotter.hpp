@@ -1,12 +1,15 @@
 #ifndef PHASE1_HPP
 #define PHASE1_HPP
 
+#include <iostream>
 #include <vector>
 #include "penguin.hpp"
 #include "buffer.hpp"
 #include "park.hpp"
 #include "plotter.hpp"
 #include "packed_array.hpp"
+
+uint8_t getK(std::string plot_fname);
 
 template <uint8_t K, uint32_t num_rows>
 class Plotter
@@ -229,43 +232,51 @@ public:
     static constexpr uint64_t max_entries_per_graph_table = (1ULL << K)*1.1;
 
     std::vector<Buffer*> buffers;
-    std::vector<std::vector<DeltaPark<line_point_delta_len_bits>*>> phase1_graph_parks;
+    std::vector<std::vector<Park*>> phase1_graph_parks;
     std::vector<DeltaPark<finaltable_y_delta_len_bits>*> phase1_final_parks;
     std::string filename;
 
-    inline Plotter(const uint8_t* id_in, const uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids_in, std::string filename_in)
+    inline Plotter(const uint8_t* id_in, uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids_in, std::string filename_in)
     {
-        id = id_in;
+        memcpy(id, id_in, sizeof(id));
         cpu_ids = cpu_ids_in;
         filename = filename_in;
         memo = memo_in;
         memo_size = memo_size_in;
     }
 
+    inline Plotter(std::vector<uint32_t> cpu_ids_in)
+    {
+        cpu_ids = cpu_ids_in;
+    }
+
     void phase1();
     void phase2();
     void phase3();
     void phase4();
+    void read(std::string plot_fname, bool decompress=true);
 
-    void check_table1();
     int32_t find_proof(uint128_t challenge);
     void find_many_proofs(uint32_t n);
     void check_parks_integrity();
     static void assert_matching(uint64_t lout, uint64_t rout);
+    void check_full_plot();
+
+    void check_full_table(uint8_t table_index);
 
     using p2_final_positions_type = PackedArray<PackedEntry<1, 1ULL << (K+1), 1>, max_entries_per_graph_table>;
-    using entries_used_type = AtomicPackedArray<BooleanPackedEntry, max_entries_per_graph_table, 1>;
+    using entries_used_type = BasePackedArray<BooleanPackedEntry, max_entries_per_graph_table, 8>;
 
     using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(K+1)), 1>, (1ULL<<(K+1)), 8>;
 
     template <int8_t table_index>
-    using p1_buckets_done_type = AtomicPackedArray<BooleanPackedEntry, GetMaxY(table_index)/kBC + 1, 1>;
+    using p1_buckets_done_type = BasePackedArray<BooleanPackedEntry, GetMaxY(table_index)/kBC + 1, 8>;
 
 
 private:
     Buffer* output_buffer;
-    const uint8_t* id;
-    const uint8_t* memo;
+    uint8_t id[32];
+    uint8_t* memo;
     uint32_t memo_size;
     std::vector<std::thread> phase2b_threads;
     std::vector<uint32_t> cpu_ids;
@@ -302,7 +313,7 @@ private:
             std::atomic<uint64_t>* coordinator,
             std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
             std::map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>>*> line_point_bucket_index,
-            std::vector<DeltaPark<line_point_delta_len_bits> *> *parks,
+            std::vector<Park*> *parks,
             Buffer* buffer
     );
 
@@ -323,7 +334,7 @@ private:
     static void phase2ThreadA(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::vector<DeltaPark<line_point_delta_len_bits>*>* parks,
+            std::vector<Park*>* parks,
             entries_used_type* current_entries_used,
             entries_used_type* prev_entries_used
     );
@@ -339,7 +350,7 @@ private:
     static void phase3ThreadA(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::vector<DeltaPark<line_point_delta_len_bits>*>* temporary_parks,
+            std::vector<Park*>* temporary_parks,
             entries_used_type* entries_used,
             std::vector<p2_final_positions_type>* final_positions,
             Buffer* output_buffer,
@@ -348,6 +359,20 @@ private:
 
     template <int8_t table_index>
     void phase3DoTable();
+
+    template <int8_t table_index>
+    void readGraphTable(std::ifstream& file_stream, bool decompress);
+
+    void readFinalTable(std::ifstream& file_stream);
+
+    void checkFullPlotThread(
+            std::atomic<uint64_t>* coordinator,
+            std::atomic<uint64_t>* proofs_found_out,
+            std::atomic<uint64_t>* proofs_verified_out,
+            std::atomic<uint64_t>* proofs_failed_matching_out,
+            std::atomic<uint64_t>* proofs_failed_value_out);
+
+    uint8_t check_match_and_return_values(uint8_t table_index, uint64_t position, uint64_t& y, uint128_t& c);
 };
 
 

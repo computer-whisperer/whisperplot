@@ -10,8 +10,8 @@ IF (CMAKE_BUILD_TYPE STREQUAL "Release")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -flto")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Ofast -flto")
     set (CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -Ofast -flto")
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNDEBUG")
-    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNDEBUG")
+    #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DNDEBUG")
+    #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DNDEBUG")
 ELSE()
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0")
@@ -85,6 +85,7 @@ add_executable(whisperplot
         src/phase4.cpp
         src/buffer.cpp
         src/check.cpp
+        src/read.cpp
         src/encoding.cpp
         src/calculate_bucket.cpp
         chiapos_inc/chacha8.c

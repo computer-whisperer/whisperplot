@@ -18,7 +18,7 @@ template <int8_t table_index>
 void Plotter<K, num_rows>::phase2ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
-        vector<DeltaPark<line_point_delta_len_bits>*>* parks,
+        vector<Park*>* parks,
         entries_used_type* current_entries_used,
         entries_used_type* prev_entries_used
         )
@@ -67,7 +67,7 @@ template <uint8_t K, uint32_t num_rows>
 template <int8_t table_index>
 void Plotter<K, num_rows>::phase2DoTable()
 {
-    entries_used->at(table_index-1).fill(BooleanPackedEntry(false));
+    memset(&(entries_used->at(table_index-1)), 0, sizeof(entries_used_type));
     cout << "Part A"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
     vector<thread> threads;

@@ -155,8 +155,6 @@ void Plotter<K, num_rows>::phase1ThreadB(
                         temp_buckets[bucket_of_entry%temp_buckets_needed].set(bucket_entry_id, temp_entry);
                         auto test_entry = temp_buckets[bucket_of_entry%temp_buckets_needed].get(bucket_entry_id);
                         test_entry.row = bucket_of_entry;
-                        if (table_index == 0)
-                            assert(f1.CalculateF(Bits(entry.c, K)).GetValue() == entry.getY());
                         if (table_index > 0)
                         {
                             uint64_t uid = penguin->getUniqueIdentifier(row_id, entry_id);
@@ -291,7 +289,7 @@ void Plotter<K, num_rows>::phase1ThreadC(
         std::atomic<uint64_t>* coordinator,
         std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
         map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>> *> line_point_bucket_indexes,
-        vector<DeltaPark<line_point_delta_len_bits> *> *parks,
+        vector<Park*> *parks,
         Buffer* buffer)
 {
     PinToCpuid(cpu_id);
@@ -330,7 +328,7 @@ void Plotter<K, num_rows>::phase1ThreadC(
                 entries.push_back(pair<uint32_t, LinePointUIDPackedEntry<table_index>>(numa_node,entry));
             }
             num_entries += entries_in_numa;
-            //penguin->popRow(row_id);
+            penguin->popRow(row_id);
         }
 
 // Sort the bucket
@@ -406,7 +404,7 @@ void Plotter<K, num_rows>::phase1ThreadD(
                 entries.push_back(e);
             }
             num_entries += entries_in_numa;
-            //penguin->popRow(row_id);
+            penguin->popRow(row_id);
         }
         //assert(num_entries < YCPackedEntry<K, 5>::max_entries_per_sort_row);
 
@@ -492,7 +490,7 @@ map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows
 // Setup the new park list and buffer
     DeltaPark<line_point_delta_len_bits> test_park(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointUIDPackedEntry<table_index>::num_rows_v));
-    phase1_graph_parks.push_back(vector<DeltaPark<line_point_delta_len_bits>*>(LinePointUIDPackedEntry<table_index>::num_rows_v));
+    phase1_graph_parks.push_back(vector<Park*>(LinePointUIDPackedEntry<table_index>::num_rows_v));
 
     coordinator = 0;
     cout << "Part C"<< (uint32_t)table_index;
@@ -583,8 +581,6 @@ void Plotter<K, num_rows>::phase1()
             num_final_matches += penguin->getCountInRow(row_id);
         }
     }
-    cout << "Entries in final penguin: " << num_final_matches << endl;
-
     cout << "Part D";
     part_start_seconds = time(nullptr);
     threads.clear();
@@ -613,9 +609,6 @@ void Plotter<K, num_rows>::phase1()
         free(phase1_new_entry_positions[numa_node]);
     }
 
-    num_final_matches = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
-    cout << "Entries in final parks: " << num_final_matches << endl;
-}
+    num_final_matches = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();}
 
 #include "explicit_templates.hpp"
-#include "packed_array.hpp"

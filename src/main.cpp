@@ -31,18 +31,37 @@ string Strip0x(const string &hex)
 using namespace std;
 
 template<uint8_t K>
-void doPlot(const uint8_t* id_in, const uint8_t* memo_in, const uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
+void createPlot(const uint8_t* id_in, uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
     auto res = new Plotter<K, 1ULL << 16>(id_in, memo_in, memo_size_in, cpu_ids, filename);
     res->phase1();
-    res->check_table1();
-    res->find_many_proofs(100);
-    res->check_parks_integrity();
     res->phase2();
     res->phase3();
     res->phase4();
-    cout << "Plot finished in " << time(nullptr) - start_seconds << "s" << endl;
+    cout << "Plot create finished in " << time(nullptr) - start_seconds << "s" << endl;
+}
+
+template<uint8_t K>
+void checkPlotFull(std::vector<uint32_t> cpu_ids, std::string filename)
+{
+    uint64_t start_seconds = time(nullptr);
+    auto res = new Plotter<K, 1ULL << 16>(cpu_ids);
+    res->read(filename);
+    res->check_full_plot();
+    cout << "Full plot check finished in " << time(nullptr) - start_seconds << "s" << endl;
+}
+
+template<uint8_t K>
+void checkPlotLight(std::vector<uint32_t> cpu_ids, std::string filename)
+{
+    uint64_t start_seconds = time(nullptr);
+    auto res = new Plotter<K, 1ULL << 16>(cpu_ids);
+    res->read(filename);
+    res->check_parks_integrity();
+    res->check_full_table(0);
+    res->find_many_proofs(100);
+    cout << "Light plot check finished in " << time(nullptr) - start_seconds << "s" << endl;
 }
 
 uint8_t hex_lookup[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
@@ -61,6 +80,14 @@ void print_data_as_hex(uint8_t * data, uint32_t data_len)
     }
 }
 
+void HelpAndQuit(cxxopts::Options options)
+{
+    cout << options.help({""}) << endl;
+    cout << "./whisperplot create" << endl;
+    cout << "./whisperplot check" << endl;
+    cout << "./whisperplot check_full" << endl;
+    exit(0);
+}
 
 int main(int argc, char *argv[]) {
     std::cout.setf( std::ios_base::unitbuf );
@@ -68,7 +95,7 @@ int main(int argc, char *argv[]) {
         "whisperplot", "A better plotter!");
 
     // Default values
-    uint8_t k = 22;
+    uint8_t k = 32;
     uint8_t num_threads = 1;
     string filename = "plot.dat";
     string tempdir = ".";
@@ -93,6 +120,17 @@ int main(int argc, char *argv[]) {
             "help", "Print help");
     auto result = options.parse(argc, argv);
 
+    if (result.count("help") || argc < 2) {
+        HelpAndQuit(options);
+    }
+    string operation = argv[1];
+
+    if (operation == "help")
+    {
+        HelpAndQuit(options);
+    }
+
+
     std::vector<uint32_t> cpu_ids;
     for (uint32_t cpuid = 0; cpuid < num_threads; cpuid++)
     {
@@ -105,7 +143,6 @@ int main(int argc, char *argv[]) {
     if (!farmer_key.empty())
     {
         // Generate an ID from keys
-
         farmer_key = Strip0x(farmer_key);
         std::vector<uint8_t> farmer_key_bytes(farmer_key.size() / 2);
         HexToBytes(farmer_key, farmer_key_bytes.data());
@@ -161,18 +198,27 @@ int main(int argc, char *argv[]) {
         HexToBytes(memo, memo_bytes.data());
     }
 
+    string final_filename = filesystem::path(finaldir) / filesystem::path(filename);
+
+    if ((operation == "check") || (operation == "check_full")) {
+        k = getK(final_filename);
+    }
+
     cout << "WhisperPlot!" << endl;
+    cout << " operation = " << operation << endl;
     cout << " k = " << static_cast<int>(k) << endl;
-    cout << " filename = " << filename << endl;
-    cout << " id = 0x";
-    print_data_as_hex(id_bytes.data(), id_bytes.size());
-    cout << " memo = 0x";
-    print_data_as_hex(memo_bytes.data(), memo_bytes.size());
+    cout << " filename = " << final_filename << endl;
     cout << " threads = "<< static_cast<int>(num_threads) << endl;
     cout << " numa nodes = "<< static_cast<int>(GetNUMANodesFromCpuIds(cpu_ids).size()) << endl;
+    if (operation == "create")
+    {
+        cout << " id = 0x";
+        print_data_as_hex(id_bytes.data(), id_bytes.size());
+        cout << " memo = 0x";
+        print_data_as_hex(memo_bytes.data(), memo_bytes.size());
+        cout << endl;
+    }
 
-
-    string final_filename = filesystem::path(finaldir) / filesystem::path(filename);
 
     for (auto &R : kRValues)
     {
@@ -180,22 +226,67 @@ int main(int argc, char *argv[]) {
     }
     Encoding::ANSBuildCache(kC3R);
 
-    switch (k)
+    if (operation == "create")
     {
-        case 18:
-            doPlot<18>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
-            break;
-        case 22:
-            doPlot<22>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
-            break;
-        case 26:
-            doPlot<26>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
-            break;
-        case 32:
-            doPlot<32>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
-            break;
-        default:
-            cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
+        switch (k)
+        {
+            case 18:
+                createPlot<18>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                break;
+            case 22:
+                createPlot<22>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                break;
+            case 26:
+                createPlot<26>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                break;
+            case 32:
+                createPlot<32>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                break;
+            default:
+                cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
+        }
+    }
+    else if (operation == "check")
+    {
+        k = getK(final_filename);
+        switch (k)
+        {
+            case 18:
+                checkPlotLight<18>(cpu_ids, final_filename);
+                break;
+            case 22:
+                checkPlotLight<22>(cpu_ids,final_filename);
+                break;
+            case 26:
+                checkPlotLight<26>(cpu_ids,final_filename);
+                break;
+            case 32:
+                checkPlotLight<32>(cpu_ids,final_filename);
+                break;
+            default:
+                cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
+        }
+    }
+    else if (operation == "check_full")
+    {
+        k = getK(final_filename);
+        switch (k)
+        {
+            case 18:
+                checkPlotFull<18>(cpu_ids,final_filename);
+                break;
+            case 22:
+                checkPlotFull<22>(cpu_ids,final_filename);
+                break;
+            case 26:
+                checkPlotFull<26>(cpu_ids,final_filename);
+                break;
+            case 32:
+                checkPlotFull<32>(cpu_ids,final_filename);
+                break;
+            default:
+                cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
+        }
     }
 
 
