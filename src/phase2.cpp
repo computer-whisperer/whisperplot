@@ -9,13 +9,14 @@
 #include "chiapos_util.hpp"
 #include "thread_mgr.hpp"
 #include "plotter.hpp"
+#include "status_update.hpp"
 
 using namespace std;
 
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 template <int8_t table_index>
-void Plotter<K, num_rows>::phase2ThreadA(
+void Plotter<conf>::phase2ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         vector<Park*>* parks,
@@ -48,8 +49,8 @@ void Plotter<K, num_rows>::phase2ThreadA(
 	}
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase2ThreadB(
+template <PlotConf conf>
+void Plotter<conf>::phase2ThreadB(
         entries_used_type* entries_used,
         p2_final_positions_type* final_positions
 )
@@ -57,19 +58,23 @@ void Plotter<K, num_rows>::phase2ThreadB(
     uint64_t new_pos = 0;
     for (uint64_t i = 0; i < max_entries_per_graph_table; i++)
     {
-        final_positions->set(i, PackedEntry<1, 1ULL << (K+1), 1>(new_pos));
+        final_positions->set(i, PackedEntry<1, 1ULL << (conf.K+1), 1>(new_pos));
         new_pos += entries_used->get(i).getY();
     }
 }
 
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 template <int8_t table_index>
-void Plotter<K, num_rows>::phase2DoTable()
+void Plotter<conf>::phase2DoTable()
 {
+    StatusUpdate::StartSeg("1." + to_string((uint32_t)table_index) + ".0S");
+
     memset(&(entries_used->at(table_index-1)), 0, sizeof(entries_used_type));
-    cout << "Part A"<< (uint32_t)table_index;
     uint64_t start_seconds = time(nullptr);
+
+    StatusUpdate::StartSeg("1." + to_string((uint32_t)table_index) + ".1M");
+
     vector<thread> threads;
     entries_used_type * current_entries_used = nullptr;
     if(table_index != 5)
@@ -80,7 +85,7 @@ void Plotter<K, num_rows>::phase2DoTable()
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K, num_rows>::phase2ThreadA<table_index>,
+                Plotter<conf>::phase2ThreadA<table_index>,
                 cpu_id,
                 &coordinator,
                 &(phase1_graph_parks[table_index]),
@@ -92,19 +97,19 @@ void Plotter<K, num_rows>::phase2DoTable()
     {
         it.join();
     }
-    cout << " (" << time(nullptr) - start_seconds << "s)" << endl;
 
     // Start final position sum thread
     phase2b_threads[table_index-1] = thread(
-            Plotter<K, num_rows>::phase2ThreadB,
+            Plotter<conf>::phase2ThreadB,
             &(entries_used->at(table_index-1)),
             &(phase2_final_positions->at(table_index - 1)));
 }
 
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase2()
+template <PlotConf conf>
+void Plotter<conf>::phase2()
 {
+    StatusUpdate::StartSeg("1.-1.0S");
     entries_used = new vector<entries_used_type>(5);
     phase2_final_positions = new vector<p2_final_positions_type>(5);
     phase2b_threads.resize(5);
@@ -115,6 +120,7 @@ void Plotter<K, num_rows>::phase2()
     phase2DoTable<3>();
     phase2DoTable<2>();
     phase2DoTable<1>();
+    StatusUpdate::EndSeg();
     cout << "Phase 2 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 }
 

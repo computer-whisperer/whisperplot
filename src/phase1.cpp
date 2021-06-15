@@ -12,28 +12,30 @@
 #include "pos_constants.hpp"
 #include "thread_mgr.hpp"
 
+#include "status_update.hpp"
+
 using namespace std;
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase1ThreadA(
+template <PlotConf conf>
+void Plotter<conf>::phase1ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         const uint8_t* id,
-        Penguin<YCPackedEntry<-1>>* new_penguin
+        Penguin<YCPackedEntry<-1>, conf.interlace_factor>* new_penguin
 )
 {
     PinToCpuid(cpu_id);
     uint64_t batch_size = (1ULL<<kBatchSizes);
     vector<uint64_t> buff(batch_size);
-    F1Calculator f1(K, id);
+    F1Calculator f1(conf.K, id);
     while (true)
     {
         uint64_t x = coordinator->fetch_add(batch_size);
-        if (x >= (1ULL<<K))
+        if (x >= (1ULL<<conf.K))
             break;
-        if ((x+batch_size) > (1ULL<<K))
+        if ((x+batch_size) > (1ULL<<conf.K))
         {
-            batch_size = (1ULL<<K) - x;
+            batch_size = (1ULL<<conf.K) - x;
         }
 
         f1.CalculateBuckets(x, batch_size, buff.data());
@@ -48,33 +50,33 @@ void Plotter<K, num_rows>::phase1ThreadA(
     }
 }
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 template <int8_t table_index>
-void Plotter<K, num_rows>::phase1ThreadB(
+void Plotter<conf>::phase1ThreadB(
         uint32_t cpu_id,
         const uint8_t* id,
         std::atomic<uint64_t> * coordinator,
         p1_buckets_done_type<table_index-1> * bucket_left_done,
         p1_buckets_done_type<table_index-1> * bucket_right_done,
         std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-        map<uint32_t, Penguin<YCPackedEntry<table_index - 1>> *> *prev_penguins,
-        Penguin<YCPackedEntry<table_index>> * new_yc_penguin,
-        Penguin<LinePointUIDPackedEntry<table_index>> * new_line_point_penguin)
+        map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor> *> *prev_penguins,
+        Penguin<YCPackedEntry<table_index>, conf.interlace_factor> * new_yc_penguin,
+        Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor> * new_line_point_penguin)
 {
     using old_yc = YCPackedEntry<table_index - 1>;
     using new_yc = YCPackedEntry<table_index>;
     using temp_yc = YCTempPackedEntry<table_index-1>;
     PinToCpuid(cpu_id);
-    F1Calculator f1(K, id);
+    F1Calculator f1(conf.K, id);
     vector<vector<uint32_t>> right_map(kBC);
     for (auto& i : right_map) {
         i.clear();
     }
     std::vector<uint32_t> right_map_clean;
-    FxCalculator fx(K, table_index+2);
+    FxCalculator fx(conf.K, table_index+2);
 
     // These are BC buckets from the chia algo
-    constexpr uint32_t bc_bucket_num = (1ULL << (K+kExtraBits))/kBC;
+    constexpr uint32_t bc_bucket_num = (1ULL << (conf.K+kExtraBits))/kBC;
     constexpr uint32_t temp_buckets_needed = old_yc::row_divisor/kBC + 4;
     constexpr uint32_t max_entries_per_bc_bucket = 350;
 
@@ -108,7 +110,7 @@ void Plotter<K, num_rows>::phase1ThreadB(
                 // Load next row
                 uint32_t row_id = latest_row_loaded + 1;
 
-                if (row_id >= num_rows)
+                if (row_id >= conf.num_rows)
                 {
                     latest_bucket_finished_load = bucket_id+1;
                     break;
@@ -172,6 +174,7 @@ void Plotter<K, num_rows>::phase1ThreadB(
                     latest_bucket_finished_load = bc_bucket_num;
                 }
             }
+            if (bucket_id%bucket_id)
 
             bucket_left_done->set(bucket_id, BooleanPackedEntry(true));
             bucket_right_done->set(bucket_id+1, BooleanPackedEntry(true));
@@ -229,9 +232,9 @@ void Plotter<K, num_rows>::phase1ThreadB(
                         right_entry.row = bucket_id+1;
 
                         // Calculate the next F and dump a new entry into the bucket index for the next table
-                        uint64_t c_len = kVectorLens[table_index + 2] * K;
+                        uint64_t c_len = kVectorLens[table_index + 2] * conf.K;
                         auto out = fx.CalculateBucket(
-                                Bits(left_entry.getY(), K + kExtraBits),
+                                Bits(left_entry.getY(), conf.K + kExtraBits),
                                 Bits(left_entry.c, c_len),
                                 Bits(right_entry.c, c_len));
 
@@ -243,11 +246,11 @@ void Plotter<K, num_rows>::phase1ThreadB(
                             memset(buff, 0, sizeof(buff));
                             out.second.ToBytes(buff);
                             new_entry.c = Util::SliceInt128FromBytes(
-                                    buff, 0, kVectorLens[table_index + 3] * K);
+                                    buff, 0, kVectorLens[table_index + 3] * conf.K);
                         }
                         else
                         {
-                            new_entry.setY(out.first.Slice(0, K).GetValue());
+                            new_entry.setY(out.first.Slice(0, conf.K).GetValue());
                         }
                         uint64_t new_entry_id = new_yc_penguin->addEntry(new_entry);
                         uint64_t sort_row = new_entry.row;
@@ -268,7 +271,7 @@ void Plotter<K, num_rows>::phase1ThreadB(
                         line_point_entry.setY(Encoding::SquareToLinePoint(x, y));
                         line_point_entry.uid = new_yc_penguin->getUniqueIdentifier(sort_row,
                                                                                          new_entry_id);
-                        assert(line_point_entry.uid < (1ULL << (K + 2)));
+                        assert(line_point_entry.uid < (1ULL << (conf.K + 2)));
                         uint32_t test_row_id = line_point_entry.row;
                         uint32_t test_entry_id = new_line_point_penguin->addEntry(line_point_entry);
                     }
@@ -281,35 +284,36 @@ void Plotter<K, num_rows>::phase1ThreadB(
     }
 }
 
-template <uint8_t K, uint32_t num_rows>
+static constexpr bool compress_phase1 = false;
+
+template <PlotConf conf>
 template <int8_t table_index>
-void Plotter<K, num_rows>::phase1ThreadC(
+void Plotter<conf>::phase1ThreadC(
         uint32_t cpu_id,
         const uint8_t* id,
         std::atomic<uint64_t>* coordinator,
         std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-        map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>> *> line_point_bucket_indexes,
+        map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor> *> line_point_penguin,
         vector<Park*> *parks,
         Buffer* buffer)
 {
     PinToCpuid(cpu_id);
-    F1Calculator f1(K, id);
+    F1Calculator f1(conf.K, id);
     vector<pair<uint32_t, LinePointUIDPackedEntry<table_index>>> entries;
     entries.reserve(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     vector<uint128_t> line_points;
     line_points.reserve(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
-    vector<uint128_t> line_points_check(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     uint64_t last_offset_computed = 0;
     uint64_t total_entries_so_far = 0;
     while (true)
     {
         uint64_t row_id = coordinator->fetch_add(1);
-        if (row_id >= num_rows)
+        if (row_id >= conf.num_rows)
             break;
 
         while (row_id > last_offset_computed)
         {
-            for (auto& [numa_node, penguin] : line_point_bucket_indexes) {
+            for (auto& [numa_node, penguin] : line_point_penguin) {
                 total_entries_so_far += penguin->getCountInRow(last_offset_computed);
             }
             last_offset_computed++;
@@ -319,7 +323,7 @@ void Plotter<K, num_rows>::phase1ThreadC(
 // Sort all entries in this bucket
         entries.clear();
         uint32_t num_entries = 0;
-        for (auto& [numa_node, penguin] : line_point_bucket_indexes)
+        for (auto& [numa_node, penguin] : line_point_penguin)
         {
             uint32_t entries_in_numa = penguin->getCountInRow(row_id);
             for (uint32_t i = 0; i < entries_in_numa; i++)
@@ -337,36 +341,50 @@ void Plotter<K, num_rows>::phase1ThreadC(
         } customLess;
         sort(entries.begin(), entries.begin()+num_entries, customLess);
 // We have a sorted entries list! Emit to output buffer and record new positions
-        auto new_park = new DeltaPark<line_point_delta_len_bits>(num_entries);
+        Park* new_park;
+        uint64_t num_bytes;
+        if (compress_phase1)
+        {
+            if (table_index == 0) {
+                using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>;
+                cp* p2 = new cp(num_entries);
+                new_park = p2;
+                num_bytes = p2->GetSpaceNeeded();
+            }
+            else {
+                using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>;
+                cp* p2 = new cp(num_entries);
+                new_park = p2;
+                num_bytes = p2->GetSpaceNeeded();
+            }
+        }
+        else
+        {
+            auto p2 = new DeltaPark<line_point_delta_len_bits>(num_entries);
+            num_bytes = p2->GetSpaceNeeded();
+            new_park = p2;
+        }
+
         new_park->start_pos = total_entries_so_far;
-        uint64_t num_bytes = new_park->GetSpaceNeeded();
         new_park->bind(buffer->data + buffer->GetInsertionOffset(num_bytes));
-        line_points.clear();
+        line_points.resize(num_entries);
         for (uint64_t i = 0; i < num_entries; i++)
         {
-            line_points.push_back(entries[i].second.getY());
-            assert(entries[i].second.uid < (1ULL<<(K+2)));
-            (*new_entry_positions)[entries[i].first]->set(entries[i].second.uid, PackedEntry<1, (1ULL<<(K+1)), 1>(i + total_entries_so_far));
+            line_points[i] = entries[i].second.getY();
+            assert(entries[i].second.uid < (1ULL<<(conf.K+2)));
+            (*new_entry_positions)[entries[i].first]->set(entries[i].second.uid, PackedEntry<1, (1ULL<<(conf.K+1)), 1>(i + total_entries_so_far));
         }
         new_park->addEntries(line_points);
         (*parks)[row_id] = new_park;
-
-        // Check that we can recover the data
-        new_park->readEntries(line_points_check);
-        for (uint32_t i = 0; i < num_entries; i++)
-        {
-            assert(line_points[i] == line_points_check[i]);
-        }
-
     }
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase1ThreadD(
+template <PlotConf conf>
+void Plotter<conf>::phase1ThreadD(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-        std::map<uint32_t, Penguin<YCPackedEntry<5>>*> line_point_penguins,
+        std::map<uint32_t, Penguin<YCPackedEntry<5>, conf.interlace_factor>*> line_point_penguins,
         vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
         Buffer* buffer)
 {
@@ -378,7 +396,7 @@ void Plotter<K, num_rows>::phase1ThreadD(
     while (true)
     {
         uint64_t row_id = coordinator->fetch_add(1);
-        if (row_id >= num_rows)
+        if (row_id >= conf.num_rows)
             break;
 
 
@@ -400,7 +418,7 @@ void Plotter<K, num_rows>::phase1ThreadD(
             {
                 uint64_t new_pos = (*new_entry_positions)[numa_node]->get(penguin->getUniqueIdentifier(row_id, i)).getY();
                 auto e = penguin->readEntry(row_id, i);
-                e.setYtemp(e.getY()<<(K+1) | new_pos);
+                e.setYtemp(e.getY()<<(conf.K+1) | new_pos);
                 entries.push_back(e);
             }
             num_entries += entries_in_numa;
@@ -428,21 +446,22 @@ void Plotter<K, num_rows>::phase1ThreadD(
     }
 }
 
-template <uint8_t K, uint32_t num_rows, int8_t table_index>
-using test_type = typename Plotter<K, num_rows>::template YCPackedEntry<table_index>;
+template <PlotConf conf, int8_t table_index>
+using test_type = typename Plotter<conf>::template YCPackedEntry<table_index>;
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 template <int8_t table_index>
-map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows>::phase1DoTable(
-        map<uint32_t, Penguin<YCPackedEntry<table_index-1>>*> prev_bucket_indexes)
+map<uint32_t, Penguin<typename Plotter<conf>::template YCPackedEntry<table_index>, conf.interlace_factor>*> Plotter<conf>::phase1DoTable(
+        map<uint32_t, Penguin<YCPackedEntry<table_index-1>, conf.interlace_factor>*> prev_penguins)
 {
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".0S");
 
-    map<uint32_t, Penguin<YCPackedEntry<table_index>>*> next_bucket_indexes;
-    map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>>*> new_line_point_bucket_indexes;
+    map<uint32_t, Penguin<YCPackedEntry<table_index>, conf.interlace_factor>*> next_bucket_indexes;
+    map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>*> new_line_point_penguins;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        next_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<table_index>>();
-        new_line_point_bucket_indexes[numa_node] = new Penguin<LinePointUIDPackedEntry<table_index>>();
+        next_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<table_index>, conf.interlace_factor>();
+        new_line_point_penguins[numa_node] = new Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>();
     }
     auto * bucket_left_done = new p1_buckets_done_type<table_index-1>();
     bucket_left_done->fill(BooleanPackedEntry(false));
@@ -451,24 +470,24 @@ map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows
     bucket_left_done->set(0, BooleanPackedEntry(true));
     bucket_right_done->set(GetMaxY(table_index)/kBC - 1, BooleanPackedEntry(true));
 
-    cout << "Part B"<< (uint32_t)table_index;
-    uint64_t start_seconds = time(nullptr);
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".1M");
+
     vector<thread> threads;
     std::atomic<uint64_t> coordinator = 0;
     for (auto & cpu_id : cpu_ids)
     {
         uint32_t numa_node = numa_node_of_cpu(cpu_id);
         threads.push_back(thread(
-                Plotter<K, num_rows>::phase1ThreadB<table_index>,
+                Plotter<conf>::phase1ThreadB<table_index>,
                 cpu_id,
                 id,
                 &coordinator,
                 bucket_left_done,
                 bucket_right_done,
                 &phase1_new_entry_positions,
-                &prev_bucket_indexes,
+                &prev_penguins,
                 next_bucket_indexes[numa_node],
-                new_line_point_bucket_indexes[numa_node]));
+                new_line_point_penguins[numa_node]));
     }
 
     for (auto &it: threads)
@@ -476,13 +495,16 @@ map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows
         it.join();
     }
 
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".2S");
+
     delete bucket_left_done;
     delete bucket_right_done;
 
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids)) {
-        delete prev_bucket_indexes[numa_node];
+        delete prev_penguins[numa_node];
     }
-    cout << " (" << time(nullptr) - start_seconds << "s)" << endl;
+
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".3S");
 
 // Unfortunately single-threaded, but not much can be done to help it
     //new_line_point_bucket_index->SumBucketOffsets();
@@ -492,19 +514,19 @@ map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointUIDPackedEntry<table_index>::num_rows_v));
     phase1_graph_parks.push_back(vector<Park*>(LinePointUIDPackedEntry<table_index>::num_rows_v));
 
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".4M");
+
     coordinator = 0;
-    cout << "Part C"<< (uint32_t)table_index;
-    start_seconds = time(nullptr);
     threads.clear();
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K, num_rows>::phase1ThreadC<table_index>,
+                Plotter<conf>::phase1ThreadC<table_index>,
                 cpu_id,
                 id,
                 &coordinator,
                 &phase1_new_entry_positions,
-                new_line_point_bucket_indexes,
+                new_line_point_penguins,
                 &(phase1_graph_parks[table_index]),
                 buffers[table_index]
         ));
@@ -514,36 +536,40 @@ map<uint32_t, Penguin<test_type<K, num_rows, table_index>>*> Plotter<K, num_rows
     {
         it.join();
     }
-    cout << " (" << time(nullptr) - start_seconds << "s)" << endl;
+
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".5S");
+
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids)) {
-        delete new_line_point_bucket_indexes[numa_node];
+        delete new_line_point_penguins[numa_node];
     }
     return next_bucket_indexes;
 }
 
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase1()
+template <PlotConf conf>
+void Plotter<conf>::phase1()
 {
+    StatusUpdate::StartSeg("0.-1.0S");
     load_tables();
+
 
     uint64_t phase_start_seconds = time(nullptr);
 
-    map<uint32_t, Penguin<YCPackedEntry<-1>>*> first_bucket_indexes;
+    map<uint32_t, Penguin<YCPackedEntry<-1>, conf.interlace_factor>*> first_bucket_indexes;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        first_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<-1>>();
+        first_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<-1>, conf.interlace_factor>();
     }
 
-    cout << "Part A";
-    uint64_t part_start_seconds = time(nullptr);
+    StatusUpdate::StartSeg("0.-1.1M");
+
     vector<thread> threads;
     std::atomic<uint64_t> coordinator = 0;
     for (auto & cpu_id : cpu_ids)
     {
         uint32_t numa_node = numa_node_of_cpu(cpu_id);
         threads.push_back(thread(
-                Plotter<K, num_rows>::phase1ThreadA,
+                Plotter<conf>::phase1ThreadA,
                 cpu_id,
                 &coordinator,
                 id,
@@ -554,7 +580,8 @@ void Plotter<K, num_rows>::phase1()
     {
         it.join();
     }
-    cout << " (" << time(nullptr) - part_start_seconds << "s)" << endl;
+
+    StatusUpdate::StartSeg("0.-1.2S");
 
 
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
@@ -569,6 +596,8 @@ void Plotter<K, num_rows>::phase1()
     auto i4 = phase1DoTable<4>(i3);
     auto i5 = phase1DoTable<5>(i4);
 
+    StatusUpdate::StartSeg("0.6.0S");
+
     DeltaPark<finaltable_y_delta_len_bits> test_park(YCPackedEntry<5>::max_entries_per_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * YCPackedEntry<5>::num_rows_v));
     phase1_final_parks.resize(YCPackedEntry<5>::num_rows_v);
@@ -576,19 +605,20 @@ void Plotter<K, num_rows>::phase1()
     uint64_t num_final_matches = 0;
     for (auto& [numa_node, penguin] : i5)
     {
-        for (uint64_t row_id = 0; row_id < num_rows; row_id++)
+        for (uint64_t row_id = 0; row_id < conf.num_rows; row_id++)
         {
             num_final_matches += penguin->getCountInRow(row_id);
         }
     }
-    cout << "Part D";
-    part_start_seconds = time(nullptr);
+
+    StatusUpdate::StartSeg("0.6.1M");
+
     threads.clear();
     coordinator = 0;
     for (auto & cpu_id : cpu_ids)
     {
         threads.push_back(thread(
-                Plotter<K, num_rows>::phase1ThreadD,
+                Plotter<conf>::phase1ThreadD,
                 cpu_id,
                 &coordinator,
                 &phase1_new_entry_positions,
@@ -600,15 +630,18 @@ void Plotter<K, num_rows>::phase1()
     {
         it.join();
     }
-    cout << " (" << time(nullptr) - part_start_seconds << "s)" << endl;
-    cout << "Phase 1 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
 
+    StatusUpdate::StartSeg("0.6.2S");
 
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
         free(phase1_new_entry_positions[numa_node]);
     }
 
-    num_final_matches = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();}
+    num_final_matches = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
+
+    StatusUpdate::EndSeg();
+    cout << "Forward pass finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
+}
 
 #include "explicit_templates.hpp"

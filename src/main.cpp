@@ -7,6 +7,8 @@
 #include "bls.hpp"
 #include "chiapos_util.hpp"
 #include "util.hpp"
+#include "status_update.hpp"
+#include "explicit_templates.hpp"
 using namespace bls;
 
 using namespace std;
@@ -34,7 +36,7 @@ template<uint8_t K>
 void createPlot(const uint8_t* id_in, uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<K, 1ULL << 16>(id_in, memo_in, memo_size_in, cpu_ids, filename);
+    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(id_in, memo_in, memo_size_in, cpu_ids, filename);
     res->phase1();
     res->phase2();
     res->phase3();
@@ -46,7 +48,7 @@ template<uint8_t K>
 void checkPlotFull(std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<K, 1ULL << 16>(cpu_ids);
+    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(cpu_ids);
     res->read(filename);
     res->check_full_plot();
     cout << "Full plot check finished in " << time(nullptr) - start_seconds << "s" << endl;
@@ -56,7 +58,7 @@ template<uint8_t K>
 void checkPlotLight(std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<K, 1ULL << 16>(cpu_ids);
+    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(cpu_ids);
     res->read(filename);
     res->check_parks_integrity();
     res->check_full_table(0);
@@ -219,6 +221,7 @@ int main(int argc, char *argv[]) {
         cout << endl;
     }
 
+    StatusUpdate::Init();
 
     for (auto &R : kRValues)
     {

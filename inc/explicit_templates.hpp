@@ -5,11 +5,13 @@
 #ifndef WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 #define WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 
-constexpr uint32_t test_num_rows = 1ULL << 16;
+constexpr uint32_t global_interlace_factor = 1ULL << 6;
+constexpr uint32_t global_num_rows = global_interlace_factor*(1ULL << 8);
 
-template class Plotter<18, test_num_rows>;
-template class Plotter<22, test_num_rows>;
-template class Plotter<26, test_num_rows>;
-template class Plotter<32, test_num_rows>;
+
+template class Plotter<PlotConf{18, global_num_rows, global_interlace_factor}>;
+template class Plotter<PlotConf{22, global_num_rows, global_interlace_factor}>;
+template class Plotter<PlotConf{26, global_num_rows, global_interlace_factor}>;
+template class Plotter<PlotConf{32, global_num_rows, global_interlace_factor}>;
 
 #endif //WHISPERPLOT_EXPLICIT_TEMPLATES_HPP

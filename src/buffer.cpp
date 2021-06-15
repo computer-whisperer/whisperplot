@@ -110,7 +110,7 @@ void Buffer::Truncate(uint64_t new_size)
 void Buffer::SwapOut()
 {
 	is_swapping = true;
-    munmap(data, data_len);
+    munmap(data, mapped_len);
     data = NULL;
     is_swapped = true;
     is_swapping = false;
@@ -131,15 +131,21 @@ void Buffer::SwapIn(bool shared)
 {
 	is_swapping = true;
     is_shared = shared;
-	uint8_t flags = shared ? MAP_SHARED : MAP_PRIVATE;
+	int flags = shared ? MAP_SHARED : MAP_PRIVATE;
+    mapped_len = data_len;
     if (!is_file_backed)
     {
-        flags = MAP_ANONYMOUS|MAP_SHARED;
+        flags = MAP_ANONYMOUS|MAP_SHARED|MAP_NORESERVE;
+        if (use_hugepages)
+        {
+            flags |= MAP_HUGETLB;
+            mapped_len = ((data_len + hugepage_len + 1)/hugepage_len)*hugepage_len;
+        }
     }
-    data = (uint8_t *) mmap(NULL, data_len, PROT_READ|PROT_WRITE, flags, fd, 0);
+    data = (uint8_t *) mmap(nullptr, mapped_len, PROT_READ|PROT_WRITE, flags, fd, 0);
     if (!is_file_backed)
     {
-        madvise(data, data_len, MADV_DONTDUMP);
+        madvise(data, mapped_len, MADV_DONTDUMP);
     }
     assert(data != MAP_FAILED);
     is_swapped = false;

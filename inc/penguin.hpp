@@ -10,58 +10,138 @@
 #include "bitpacker.hpp"
 #include "packed_array.hpp"
 
-template <class entry_type>
+
+
+template <class entry_type, uint32_t interlace_factor>
 class Penguin
 {
-    using Row = BasePackedArray<entry_type, entry_type::max_entries_per_row, 8>;
+    static constexpr bool use_hugepages = true;
 
-    static constexpr uint64_t row_count = entry_type::num_rows_v;
+    static constexpr uint64_t hugepage_len = 1ULL << 21;
 
-    std::atomic<uint64_t> entry_counts[row_count];
-    Row * rows;
+    using Row = BasePackedArray<entry_type, entry_type::max_entries_per_row*interlace_factor, 8>;
+
+    static constexpr uint64_t sort_row_count = entry_type::num_rows_v;
+    static constexpr uint64_t store_row_count = (sort_row_count + interlace_factor - 1)/interlace_factor;
+
+    std::atomic<uint32_t> pop_counts[store_row_count];
+
+    std::atomic<uint64_t> entry_counts[sort_row_count];
+    Row* rows[store_row_count];
+
+    static constexpr uint64_t row_size_bytes = ((sizeof(Row) + hugepage_len - 1)/hugepage_len)*hugepage_len;
 
 public:
     inline Penguin()
     {
-        rows = (Row*) mmap(nullptr, sizeof(Row)*row_count, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_SHARED, -1, 0);
-        madvise(rows, sizeof(Row)*row_count, MADV_DONTDUMP);
+        for (uint32_t i = 0; i < store_row_count; i++) {
+            int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE;
+        if (use_hugepages)
+                flags |= MAP_HUGETLB;
+            uint8_t *test = (uint8_t *) mmap(nullptr, row_size_bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
+            rows[i] = (Row *) test;
+            if (test == nullptr)
+            {
+                std::cerr << "Failed to mmap:" << strerror(errno) << std::endl;
+            }
+
+            if (madvise(test, row_size_bytes, MADV_DONTDUMP))
+            {
+                std::cerr << "Failed to MADV_DONTDUMP:" << strerror(errno) << std::endl;
+            }
+        /*    if (use_hugepages)
+            {
+                if (madvise(test, row_size_bytes, MADV_HUGEPAGE))
+                {
+                    std::cerr << "Failed to MADV_HUGEPAGE:" << strerror(errno) << std::endl;
+                }
+            }*/
+        }
+        for (auto& it : entry_counts)
+        {
+            it = 0;
+        }
+        for (auto& it : pop_counts)
+        {
+            it = 0;
+        }
     }
 
     inline ~Penguin()
     {
-        munmap(rows, sizeof(Row)*row_count);
+        for (uint32_t i = 0; i < store_row_count; i++)
+        {
+            if (use_hugepages)
+            {
+                if (munmap(rows[i], row_size_bytes))
+                {
+                    std::cerr << "Failed to munmap:" << strerror(errno) << std::endl;
+                }
+            }
+            else
+            {
+                if (madvise(rows[i], row_size_bytes, MADV_FREE))
+                {
+                    std::cerr << "Failed to MADV_FREE:" << strerror(errno) << std::endl;
+                }
+            }
+        }
     }
 
     inline uint64_t addEntry(entry_type entry)
     {
-        assert(entry.row < row_count);
+        assert(entry.row < sort_row_count);
         uint64_t idx = entry_counts[entry.row]++;
+        uint64_t store_row_id = entry.row / interlace_factor;
+        uint32_t interlace = entry.row % interlace_factor;
         assert(idx < entry_type::max_entries_per_row);
-        rows[entry.row].set(idx, entry);
+        rows[store_row_id]->set(interlace + idx*interlace_factor, entry);
         return idx;
     }
 
-    inline uint64_t getCountInRow(uint64_t row_id)
+    inline uint64_t getCountInRow(uint64_t sort_row_id)
     {
-        assert(row_id < row_count);
-        return entry_counts[row_id];
+        assert(sort_row_id < sort_row_count);
+        return entry_counts[sort_row_id];
     }
 
-    inline entry_type readEntry(uint64_t row_id, uint64_t entry_id)
+    inline entry_type readEntry(uint64_t sort_row_id, uint64_t entry_id)
     {
-        assert(row_id < row_count);
-        entry_type entry = rows[row_id].get(entry_id);
-        entry.row = row_id;
+        assert(sort_row_id < sort_row_count);
+        uint64_t store_row_id = sort_row_id / interlace_factor;
+        uint32_t interlace = sort_row_id % interlace_factor;
+        entry_type entry = rows[store_row_id]->get(interlace + entry_id*interlace_factor);
+        entry.row = sort_row_id;
         return entry;
     }
     inline void popRow(uint64_t row_id)
     {
-        assert(row_id < row_count);
-        madvise(rows + row_id, sizeof(Row), MADV_FREE);
+        assert(row_id < sort_row_count);
+
+        uint64_t store_row_id = row_id/interlace_factor;
+        pop_counts[store_row_id]++;
+
+        if (pop_counts[store_row_id] == interlace_factor)
+        {
+            if (use_hugepages)
+            {
+                if (munmap(rows[store_row_id], row_size_bytes))
+                {
+                    std::cerr << "Failed to munmap:" << strerror(errno) << std::endl;
+                }
+            }
+            else
+            {
+                if (madvise(rows[store_row_id], row_size_bytes, MADV_FREE))
+                {
+                    std::cerr << "Failed to MADV_FREE:" << strerror(errno) << std::endl;
+                }
+            }
+        }
     }
-    inline uint64_t getUniqueIdentifier(uint64_t bucket_id, uint32_t entry_id)
+    inline uint64_t getUniqueIdentifier(uint64_t sort_row_id, uint32_t entry_id)
     {
-        return bucket_id + entry_id*entry_type::num_rows_v;
+        return sort_row_id + entry_id * entry_type::num_rows_v;
     }
 
 };

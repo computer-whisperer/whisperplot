@@ -20,11 +20,17 @@
 #include <thread>
 #include "bits.hpp"
 
+
 extern std::string buffer_tmpdir;
 extern bool buffer_use_tmp;
 
 class Buffer
 {
+    static constexpr bool use_hugepages = true;
+    static constexpr uint64_t hugepage_len = 1ULL << 21;
+
+    uint64_t mapped_len;
+
 public:
     bool is_file_backed = true;
     bool is_shared;

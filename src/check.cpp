@@ -9,8 +9,8 @@
 
 using namespace std;
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::assert_matching(uint64_t lout, uint64_t rout)
+template <PlotConf conf>
+void Plotter<conf>::assert_matching(uint64_t lout, uint64_t rout)
 {
 
     int64_t bucket_id_lout = lout/kBC;
@@ -30,11 +30,11 @@ void Plotter<K, num_rows>::assert_matching(uint64_t lout, uint64_t rout)
 
 }
 
-template <uint8_t K, uint32_t num_rows>
-int32_t Plotter<K, num_rows>::find_proof(uint128_t challenge_in)
+template <PlotConf conf>
+int32_t Plotter<conf>::find_proof(uint128_t challenge_in)
 {
-    F1Calculator f1(K, id);
-    uint64_t challenge = challenge_in%(1ULL<<K);
+    F1Calculator f1(conf.K, id);
+    uint64_t challenge = challenge_in%(1ULL<<conf.K);
     //cout << "Looking for : " << challenge << endl;
     int32_t proof_num = 1;
     while (true)
@@ -47,8 +47,8 @@ int32_t Plotter<K, num_rows>::find_proof(uint128_t challenge_in)
             park->readEntries(line_points);
             for (auto& line_point : line_points)
             {
-                pos = line_point&((1ULL << (K+1))-1);
-                uint64_t y = line_point>>(K+1);
+                pos = line_point&((1ULL << (conf.K+1))-1);
+                uint64_t y = line_point>>(conf.K+1);
                 if (y == challenge) {
                     found++;
                     if (found == proof_num)
@@ -116,14 +116,14 @@ int32_t Plotter<K, num_rows>::find_proof(uint128_t challenge_in)
                 {
                     for (unsigned long i : x)
                     {
-                        Bits b = Bits(i, K);
+                        Bits b = Bits(i, conf.K);
                         output_collations.push_back(b);
                         output_fs.push_back(f1.CalculateF(b));
                     }
                 }
                 else
                 {
-                    FxCalculator fx(K, fi);
+                    FxCalculator fx(conf.K, fi);
                     for (uint32_t i = 0; i < input_collations.size(); i += 2)
                     {
                         // Swap inputs if needed
@@ -146,7 +146,7 @@ int32_t Plotter<K, num_rows>::find_proof(uint128_t challenge_in)
                 input_fs = output_fs;
             }
             //cout << "Result of tree: f7(...) = " << input_fs[0].Slice(0, K).GetValue() << endl;
-            if (input_fs[0].Slice(0, K).GetValue() == challenge)
+            if (input_fs[0].Slice(0, conf.K).GetValue() == challenge)
             {
                 proof_num++;
             }
@@ -163,8 +163,8 @@ int32_t Plotter<K, num_rows>::find_proof(uint128_t challenge_in)
 
 }
 
-template <uint8_t K, uint32_t num_rows>
-uint8_t Plotter<K, num_rows>::check_match_and_return_values(uint8_t table_index, uint64_t position, uint64_t& y, uint128_t& c)
+template <PlotConf conf>
+uint8_t Plotter<conf>::check_match_and_return_values(uint8_t table_index, uint64_t position, uint64_t& y, uint128_t& c)
 {
 
     uint64_t yl = 0;
@@ -212,14 +212,14 @@ uint8_t Plotter<K, num_rows>::check_match_and_return_values(uint8_t table_index,
     }
     else
     {
-        F1Calculator f1(K, id);
+        F1Calculator f1(conf.K, id);
         cl = square.first;
         cr = square.second;
-        yl = f1.CalculateF(Bits(cl, K)).GetValue();
-        yr = f1.CalculateF(Bits(cr, K)).GetValue();
+        yl = f1.CalculateF(Bits(cl, conf.K)).GetValue();
+        yr = f1.CalculateF(Bits(cr, conf.K)).GetValue();
     }
 
-    FxCalculator fx(K, table_index+2);
+    FxCalculator fx(conf.K, table_index+2);
     if (yl > yr)
     {
         swap(yl, yr);
@@ -250,29 +250,29 @@ uint8_t Plotter<K, num_rows>::check_match_and_return_values(uint8_t table_index,
         return 1;
     }
 
-    uint64_t c_len = kVectorLens[table_index + 2] * K;
+    uint64_t c_len = kVectorLens[table_index + 2] * conf.K;
     auto out = fx.CalculateBucket(
-            Bits(yl, K+kExtraBits),
+            Bits(yl, conf.K+kExtraBits),
             Bits(cl, c_len),
             Bits(cr, c_len));
     if (table_index < 5) {
-        y = out.first.Slice(0, K+kExtraBits).GetValue();
+        y = out.first.Slice(0, conf.K+kExtraBits).GetValue();
         uint8_t buff[32];
         memset(buff, 0, sizeof(buff));
         out.second.ToBytes(buff);
         c = Util::SliceInt128FromBytes(
-                buff, 0, kVectorLens[table_index + 3] * K);
+                buff, 0, kVectorLens[table_index + 3] * conf.K);
     }
     else
     {
-        y = out.first.Slice(0, K).GetValue();
+        y = out.first.Slice(0, conf.K).GetValue();
     }
 
     return 0;
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::checkFullPlotThread(
+template <PlotConf conf>
+void Plotter<conf>::checkFullPlotThread(
         std::atomic<uint64_t>* coordinator,
         std::atomic<uint64_t>* proofs_found_out,
         std::atomic<uint64_t>* proofs_verified_out,
@@ -303,8 +303,8 @@ void Plotter<K, num_rows>::checkFullPlotThread(
             {
                 proofs_found++;
 
-                uint64_t pos = line_point%(1ULL << (K+1));
-                uint64_t y = line_point>>(K+1);
+                uint64_t pos = line_point%(1ULL << (conf.K+1));
+                uint64_t y = line_point>>(conf.K+1);
 
                 uint64_t y_calculated;
                 uint128_t c;
@@ -330,8 +330,8 @@ void Plotter<K, num_rows>::checkFullPlotThread(
     *proofs_failed_value_out += proofs_failed_value;
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::check_full_plot()
+template <PlotConf conf>
+void Plotter<conf>::check_full_plot()
 {
     cout << "Verifying all proofs" << endl;
     uint64_t part_start_seconds = time(nullptr);
@@ -371,8 +371,8 @@ void Plotter<K, num_rows>::check_full_plot()
 }
 
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::check_full_table(uint8_t table_index)
+template <PlotConf conf>
+void Plotter<conf>::check_full_table(uint8_t table_index)
 {
     cout << "Verifying all entries in table " << static_cast<uint32_t>(table_index) << " and below" << endl;
     uint64_t part_start_seconds = time(nullptr);
@@ -420,8 +420,8 @@ void Plotter<K, num_rows>::check_full_table(uint8_t table_index)
     cout << "Verification finished in " << time(nullptr) - part_start_seconds << "s" << endl;
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::find_many_proofs(uint32_t n)
+template <PlotConf conf>
+void Plotter<conf>::find_many_proofs(uint32_t n)
 {
     uint32_t successes = 0;
     uint32_t failures = 0;
@@ -441,8 +441,8 @@ void Plotter<K, num_rows>::find_many_proofs(uint32_t n)
     cout << "Found " << failures << "/" << n << " failed Proofs" << endl;
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::check_parks_integrity()
+template <PlotConf conf>
+void Plotter<conf>::check_parks_integrity()
 {
     vector<uint128_t> line_points_check;
     uint128_t prev_last_entry = 0;

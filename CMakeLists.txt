@@ -85,6 +85,7 @@ add_executable(whisperplot
         src/phase4.cpp
         src/buffer.cpp
         src/check.cpp
+        src/status_update.cpp
         src/read.cpp
         src/encoding.cpp
         src/calculate_bucket.cpp

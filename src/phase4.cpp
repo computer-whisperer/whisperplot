@@ -7,11 +7,11 @@
 
 using namespace std;
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::phase4()
+template <PlotConf conf>
+void Plotter<conf>::phase4()
 {
     uint64_t phase_start_seconds = time(nullptr);
-    uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;
+    uint32_t P7_park_size = Util::ByteAlign((conf.K + 1) * kEntriesPerPark) / 8;
     uint64_t num_entries = (*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size();
     cout << "Entries in final table: " << num_entries << endl;
     uint64_t number_of_p7_parks = (num_entries + kEntriesPerPark-1)/kEntriesPerPark;
@@ -19,11 +19,11 @@ void Plotter<K, num_rows>::phase4()
     uint64_t begin_byte_C1 = bswap_64(final_table_begin_pointers[6]) + number_of_p7_parks * P7_park_size;
 
     uint64_t total_C1_entries = cdiv(num_entries, kCheckpoint1Interval);
-    uint64_t begin_byte_C2 = begin_byte_C1 + (total_C1_entries + 1) * (Util::ByteAlign(K) / 8);
+    uint64_t begin_byte_C2 = begin_byte_C1 + (total_C1_entries + 1) * (Util::ByteAlign(conf.K) / 8);
     uint64_t total_C2_entries = cdiv(total_C1_entries, kCheckpoint2Interval);
-    uint64_t begin_byte_C3 = begin_byte_C2 + (total_C2_entries + 1) * (Util::ByteAlign(K) / 8);
+    uint64_t begin_byte_C3 = begin_byte_C2 + (total_C2_entries + 1) * (Util::ByteAlign(conf.K) / 8);
 
-    uint32_t size_C3 = EntrySizes::CalculateC3Size(K);
+    uint32_t size_C3 = EntrySizes::CalculateC3Size(conf.K);
     uint64_t end_byte = begin_byte_C3 + (total_C1_entries)*size_C3;
 
     final_table_begin_pointers[7] = bswap_64(begin_byte_C1);
@@ -65,12 +65,12 @@ void Plotter<K, num_rows>::phase4()
 
         for (auto & line_point: line_points)
         {
-            uint64_t pos = line_point&((1ULL << (K+1))-1);
-            uint64_t y = line_point>>(K+1);
+            uint64_t pos = line_point&((1ULL << (conf.K+1))-1);
+            uint64_t y = line_point>>(conf.K+1);
 
             assert(prev_y <= y);
 
-            Bits entry_y_bits = Bits(y, K);
+            Bits entry_y_bits = Bits(y, conf.K);
 
             if (f7_position % kEntriesPerPark == 0 && f7_position > 0) {
                 memset(P7_entry_buf, 0, P7_park_size);
@@ -81,14 +81,14 @@ void Plotter<K, num_rows>::phase4()
                 to_write_p7 = ParkBits();
             }
 
-            to_write_p7 += ParkBits(pos, K + 1);
+            to_write_p7 += ParkBits(pos, conf.K + 1);
 
             if (f7_position % kCheckpoint1Interval == 0) {
-                assert(entry_y_bits.GetSize() <= Util::ByteAlign(K));
+                assert(entry_y_bits.GetSize() <= Util::ByteAlign(conf.K));
                 entry_y_bits.ToBytes(C1_entry_buf);
                 assert(final_file_writer_1 < output_buffer->data_len);
-                memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(K) / 8);
-                final_file_writer_1 += Util::ByteAlign(K) / 8;
+                memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(conf.K) / 8);
+                final_file_writer_1 += Util::ByteAlign(conf.K) / 8;
                 if (num_C1_entries > 0) {
                     final_file_writer_2 = begin_byte_C3 + (num_C1_entries - 1) * size_C3;
                     size_t num_bytes =
@@ -148,20 +148,20 @@ void Plotter<K, num_rows>::phase4()
         Encoding::ANSFree(kC3R);
     }
 
-    Bits(0, Util::ByteAlign(K)).ToBytes(C1_entry_buf);
-    memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(K) / 8);
-    final_file_writer_1 += Util::ByteAlign(K) / 8;
+    Bits(0, Util::ByteAlign(conf.K)).ToBytes(C1_entry_buf);
+    memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(conf.K) / 8);
+    final_file_writer_1 += Util::ByteAlign(conf.K) / 8;
     std::cout << "\tFinished writing C1 and C3 tables" << std::endl;
     std::cout << "\tWriting C2 table" << std::endl;
 
     for (Bits &C2_entry : C2) {
         C2_entry.ToBytes(C1_entry_buf);
-        memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(K) / 8);
-        final_file_writer_1 += Util::ByteAlign(K) / 8;
+        memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(conf.K) / 8);
+        final_file_writer_1 += Util::ByteAlign(conf.K) / 8;
     }
-    Bits(0, Util::ByteAlign(K)).ToBytes(C1_entry_buf);
-    memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(K) / 8);
-    final_file_writer_1 += Util::ByteAlign(K) / 8;
+    Bits(0, Util::ByteAlign(conf.K)).ToBytes(C1_entry_buf);
+    memcpy(output_buffer->data + final_file_writer_1, (C1_entry_buf), Util::ByteAlign(conf.K) / 8);
+    final_file_writer_1 += Util::ByteAlign(conf.K) / 8;
     std::cout << "\tFinished writing C2 table" << std::endl;
 
     free(C3_entry_buf);

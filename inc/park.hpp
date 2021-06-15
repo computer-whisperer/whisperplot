@@ -87,8 +87,17 @@ class CompressedPark : public Park {
         return ((num_entries - 1) * max_average_delta+7) / 8;
     }
 
+    std::vector<uint64_t>* stubs_buff;
+    std::vector<uint8_t>* deltas_buff;
+
 public:
     explicit CompressedPark(uint64_t num_entries_in) : Park(num_entries_in){}
+
+    inline void useBuffers(std::vector<uint64_t>* stubs_buff_in, std::vector<uint8_t>* deltas_buff_in)
+    {
+        stubs_buff = stubs_buff_in;
+        deltas_buff = deltas_buff_in;
+    }
 
     inline uint64_t GetSpaceNeeded()
     {
@@ -97,6 +106,8 @@ public:
 
     inline void addEntries(std::vector<uint128_t>& src) override
     {
+        stubs_buff->resize(src.size());
+        deltas_buff->resize(src.size());
         start_value = src[0];
 
         // Since we have approx 2^k line_points between 0 and 2^2k, the average
@@ -105,8 +116,6 @@ public:
         // significant (k-kMinusStubs) bits, and largely random/incompressible. The small
         // delta is the rest, which can be efficiently encoded since it's usually very
         // small.
-        std::vector<uint64_t> park_stubs(src.size()-1);
-        std::vector<uint8_t> park_deltas(src.size()-1);
 
         for (uint32_t i = 1; i < src.size(); i++)
         {
@@ -115,8 +124,8 @@ public:
             uint64_t stub = big_delta & ((1ULL << (delta_len - stub_minus_bits)) - 1);
             uint64_t small_delta = big_delta >> (delta_len - stub_minus_bits);
             assert(small_delta < 256);
-            park_deltas[i-1] = small_delta;
-            park_stubs[i-1] = stub;
+            deltas_buff->at(i-1) = small_delta;
+            stubs_buff->at(i-1) = stub;
         }
 
         // Parks are fixed size, so we know where to start writing. The deltas will not go over
@@ -132,7 +141,7 @@ public:
         ParkBits park_stubs_bits;
         for (uint32_t i = 0; i < src.size()-1; i++)
         {
-            park_stubs_bits.AppendValue(park_stubs[i], (delta_len - stub_minus_bits));
+            park_stubs_bits.AppendValue(stubs_buff->at(i), (delta_len - stub_minus_bits));
         }
         uint32_t stubs_size = getStubsSize();
         uint32_t stubs_valid_size = cdiv(park_stubs_bits.GetSize(), 8);
@@ -143,13 +152,13 @@ public:
         // The stubs are random so they don't need encoding. But deltas are more likely to
         // be small, so we can compress them
         uint8_t *deltas_start = dest + 2;
-        size_t deltas_size = Encoding::ANSEncodeDeltas(park_deltas, src.size()-1, R, deltas_start);
+        size_t deltas_size = Encoding::ANSEncodeDeltas(*deltas_buff, src.size()-1, R, deltas_start);
 
         if (!deltas_size) {
             // Uncompressed
             deltas_size = src.size()-1;
             Util::IntToTwoBytesLE(dest, deltas_size | 0x8000);
-            memcpy(deltas_start, park_deltas.data(), deltas_size);
+            memcpy(deltas_start, deltas_buff->data(), deltas_size);
         } else {
             // Compressed
             Util::IntToTwoBytesLE(dest, deltas_size);
@@ -186,7 +195,7 @@ public:
         if (0x8000 & encoded_deltas_size) {
             // Uncompressed
             encoded_deltas_size &= 0x7fff;
-            deltas.resize(encoded_deltas_size);
+            deltas_buff->resize(encoded_deltas_size);
             memcpy(deltas.data(), src, encoded_deltas_size);
         } else {
             // Compressed

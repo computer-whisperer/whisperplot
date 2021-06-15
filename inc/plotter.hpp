@@ -9,9 +9,16 @@
 #include "plotter.hpp"
 #include "packed_array.hpp"
 
+struct PlotConf
+{
+    uint8_t K;
+    uint32_t num_rows;
+    uint32_t interlace_factor;
+};
+
 uint8_t getK(std::string plot_fname);
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 class Plotter
 {
 public:
@@ -19,19 +26,19 @@ public:
     static constexpr uint64_t GetMaxY(int8_t table_index)
     {
         if (table_index < 5)
-            return 1ULL << (K+kExtraBits);
+            return 1ULL << (conf.K+kExtraBits);
         else
-            return 1ULL << K;
+            return 1ULL << conf.K;
     }
 
     static constexpr uint128_t GetMaxLinePoint(int8_t table_index)
     {
-        uint128_t max_y = (1ULL << K)*1.1 - 1;
-        uint128_t max_x = (1ULL << K)*1.1;
+        uint128_t max_y = (1ULL << conf.K)*1.1 - 1;
+        uint128_t max_x = (1ULL << conf.K)*1.1;
         if (table_index == 0)
         {
-            max_y = (1ULL << K)-1;
-            max_x = 1ULL << K;
+            max_y = (1ULL << conf.K)-1;
+            max_x = 1ULL << conf.K;
         }
 
         uint64_t a = max_x, b = max_x - 1;
@@ -45,7 +52,7 @@ public:
 
     static constexpr uint64_t GetMeanEntryCount(int8_t table_index)
     {
-        return 1ULL << K;
+        return 1ULL << conf.K;
     }
 
     static constexpr uint64_t GetCLen(int8_t table_index)
@@ -53,25 +60,25 @@ public:
         switch (table_index)
         {
             case -1:
-                return K;
+                return conf.K;
             case 0:
-                return K*2;
+                return conf.K*2;
             case 1:
             case 2:
-                return K*4;
+                return conf.K*4;
             case 3:
-                return K*3;
+                return conf.K*3;
             case 4:
-                return K*2;
+                return conf.K*2;
             default:
                 return 0;
         }
     }
 
     template<int8_t table_index>
-    class YCPackedEntry : public PackedEntry<num_rows, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>
+    class YCPackedEntry : public PackedEntry<conf.num_rows, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>
     {
-        using parent = PackedEntry<num_rows, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>;
+        using parent = PackedEntry<conf.num_rows, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>;
     public:
         static constexpr uint64_t c_len_bits = GetCLen(table_index);
 
@@ -191,11 +198,11 @@ public:
     };
 
     template<int8_t table_index>
-    class LinePointUIDPackedEntry : public PackedEntry<num_rows, GetMaxLinePoint(table_index)+1, GetMeanEntryCount(table_index)*2>
+    class LinePointUIDPackedEntry : public PackedEntry<conf.num_rows, GetMaxLinePoint(table_index)+1, GetMeanEntryCount(table_index)*2>
     {
-        using parent = PackedEntry<num_rows, GetMaxLinePoint(table_index)+1, GetMeanEntryCount(table_index)*2>;
+        using parent = PackedEntry<conf.num_rows, GetMaxLinePoint(table_index)+1, GetMeanEntryCount(table_index)*2>;
     public:
-        static constexpr uint64_t uid_len_bits = K+2;
+        static constexpr uint64_t uid_len_bits = conf.K+2;
         static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + uid_len_bits;
         uint64_t uid;
         inline void pack(uint8_t * dest, uint64_t offset) override
@@ -227,9 +234,9 @@ public:
         }
     };
 
-    static constexpr uint8_t line_point_delta_len_bits = K + 10;
-    static constexpr uint8_t finaltable_y_delta_len_bits = K + 10;
-    static constexpr uint64_t max_entries_per_graph_table = (1ULL << K)*1.1;
+    static constexpr uint8_t line_point_delta_len_bits = conf.K + 10;
+    static constexpr uint8_t finaltable_y_delta_len_bits = conf.K + 10;
+    static constexpr uint64_t max_entries_per_graph_table = (1ULL << conf.K)*1.1;
 
     std::vector<Buffer*> buffers;
     std::vector<std::vector<Park*>> phase1_graph_parks;
@@ -264,10 +271,10 @@ public:
 
     void check_full_table(uint8_t table_index);
 
-    using p2_final_positions_type = PackedArray<PackedEntry<1, 1ULL << (K+1), 1>, max_entries_per_graph_table>;
+    using p2_final_positions_type = PackedArray<PackedEntry<1, 1ULL << (conf.K+1), 1>, max_entries_per_graph_table>;
     using entries_used_type = BasePackedArray<BooleanPackedEntry, max_entries_per_graph_table, 8>;
 
-    using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(K+1)), 1>, (1ULL<<(K+1)), 8>;
+    using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(conf.K+1)), 1>, (1ULL<<(conf.K+1)), 8>;
 
     template <int8_t table_index>
     using p1_buckets_done_type = BasePackedArray<BooleanPackedEntry, GetMaxY(table_index)/kBC + 1, 8>;
@@ -291,7 +298,7 @@ private:
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
             const uint8_t* id,
-            Penguin<YCPackedEntry<-1>>* new_penguin
+            Penguin<YCPackedEntry<-1>, conf.interlace_factor>* new_penguin
     );
 
     template <int8_t table_index>
@@ -302,9 +309,9 @@ private:
             p1_buckets_done_type<table_index-1> * bucket_left_done,
             p1_buckets_done_type<table_index-1> * bucket_right_done,
             std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>>*>* prev_penguins,
-            Penguin<YCPackedEntry<table_index>>* new_yc_penguin,
-            Penguin<LinePointUIDPackedEntry<table_index>>* new_line_point_penguin);
+            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor>*>* prev_penguins,
+            Penguin<YCPackedEntry<table_index>, conf.interlace_factor>* new_yc_penguin,
+            Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>* new_line_point_penguin);
 
     template <int8_t table_index>
     static void phase1ThreadC(
@@ -312,7 +319,7 @@ private:
             const uint8_t* id,
             std::atomic<uint64_t>* coordinator,
             std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-            std::map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>>*> line_point_bucket_index,
+            std::map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>*> line_point_penguin,
             std::vector<Park*> *parks,
             Buffer* buffer
     );
@@ -321,14 +328,14 @@ private:
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
             std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-            std::map<uint32_t, Penguin<YCPackedEntry<5>>*> line_point_penguins,
+            std::map<uint32_t, Penguin<YCPackedEntry<5>, conf.interlace_factor>*> line_point_penguins,
             std::vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
             Buffer* buffer
     );
 
     template <int8_t table_index>
-    std::map<uint32_t, Penguin<YCPackedEntry<table_index>>*> phase1DoTable(
-            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>>*> prev_bucket_indexes);
+    std::map<uint32_t, Penguin<YCPackedEntry<table_index>, conf.interlace_factor>*> phase1DoTable(
+            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor>*> prev_bucket_indexes);
 
     template <int8_t table_index>
     static void phase2ThreadA(

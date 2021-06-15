@@ -47,9 +47,9 @@ static void SafeRead(std::ifstream& disk_file, uint8_t* target, uint64_t size) {
     }
 }
 
-template <uint8_t K, uint32_t num_rows>
+template <PlotConf conf>
 template <int8_t table_index>
-void Plotter<K, num_rows>::readGraphTable(std::ifstream& file_stream, bool decompress)
+void Plotter<conf>::readGraphTable(std::ifstream& file_stream, bool decompress)
 {
     uint64_t table_len_bytes = final_table_begin_pointers[table_index+1] - final_table_begin_pointers[table_index];
     Buffer* table_buffer;
@@ -75,18 +75,18 @@ void Plotter<K, num_rows>::readGraphTable(std::ifstream& file_stream, bool decom
 
     // Generate park list
     uint64_t park_start_pos = 0;
-    uint64_t park_size_bytes = EntrySizes::CalculateParkSize(K, table_index+1);
+    uint64_t park_size_bytes = EntrySizes::CalculateParkSize(conf.K, table_index+1);
     uint64_t last_park_end = 0;
     while (last_park_end < table_len_bytes)
     {
         Park* p;
         if (table_index == 0) {
-            using cp = CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>;
+            using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>;
             cp* p2 = new cp(kEntriesPerPark);
             p = p2;
         }
         else {
-            using cp = CompressedPark<K * 2, K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>;
+            using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>;
             cp* p2 = new cp(kEntriesPerPark);
             p = p2;
         }
@@ -114,10 +114,10 @@ void Plotter<K, num_rows>::readGraphTable(std::ifstream& file_stream, bool decom
     }
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::readFinalTable(std::ifstream& file_stream)
+template <PlotConf conf>
+void Plotter<conf>::readFinalTable(std::ifstream& file_stream)
 {
-    uint32_t P7_park_size = Util::ByteAlign((K + 1) * kEntriesPerPark) / 8;
+    uint32_t P7_park_size = Util::ByteAlign((conf.K + 1) * kEntriesPerPark) / 8;
 
     uint64_t p7_len_bytes = final_table_begin_pointers[7] - final_table_begin_pointers[6];
     auto p7_buff = (uint8_t*)malloc(p7_len_bytes);
@@ -141,7 +141,7 @@ void Plotter<K, num_rows>::readFinalTable(std::ifstream& file_stream)
     uint64_t max_possible_pos = (*(phase1_graph_parks[5].end()-1))->start_pos + (*(phase1_graph_parks[5].end()-1))->size();
 
     // Iterate over c3, read data from p7, and generate the parks
-    uint64_t park_size_bytes = EntrySizes::CalculateC3Size(K);
+    uint64_t park_size_bytes = EntrySizes::CalculateC3Size(conf.K);
     uint64_t c3_last_park_end = 0;
     uint128_t last_park_last_val = 0;
     uint64_t entry_i = 0;
@@ -152,9 +152,9 @@ void Plotter<K, num_rows>::readFinalTable(std::ifstream& file_stream)
         uint128_t raw_values[kCheckpoint1Interval];
 
         // Grab value from c1
-        uint32_t c1_entry_size_bytes = Util::ByteAlign(K) / 8;
-        Bits c1_entry_bits = Bits(c1_buff+(c1_index++)*c1_entry_size_bytes, c1_entry_size_bytes, Util::ByteAlign(K));
-        raw_values[0] = c1_entry_bits.Slice(0, K).GetValue();
+        uint32_t c1_entry_size_bytes = Util::ByteAlign(conf.K) / 8;
+        Bits c1_entry_bits = Bits(c1_buff+(c1_index++)*c1_entry_size_bytes, c1_entry_size_bytes, Util::ByteAlign(conf.K));
+        raw_values[0] = c1_entry_bits.Slice(0, conf.K).GetValue();
 
         // Deconstruct c3 park
         uint64_t encoded_size = Bits(park_input_data, 2, 16).GetValue();
@@ -177,7 +177,7 @@ void Plotter<K, num_rows>::readFinalTable(std::ifstream& file_stream)
             uint64_t park_num = (entry_i)/kEntriesPerPark;
             uint64_t park_offset = (entry_i)%kEntriesPerPark;
             entry_i++;
-            std::span<uint8_t> s{p7_buff + park_num*P7_park_size, (park_offset*(K+1) + (K+1) + 7)/8};
+            std::span<uint8_t> s{p7_buff + park_num*P7_park_size, (park_offset*(conf.K+1) + (conf.K+1) + 7)/8};
 
             if (park_num*P7_park_size >= p7_len_bytes)
             {
@@ -185,10 +185,10 @@ void Plotter<K, num_rows>::readFinalTable(std::ifstream& file_stream)
                 break;
             }
 
-            auto pos = bitpacker::extract<uint64_t>(s, park_offset*(K+1), K+1);
+            auto pos = bitpacker::extract<uint64_t>(s, park_offset*(conf.K+1), conf.K+1);
             // sanity check
             assert(pos < max_possible_pos);
-            line_points[i] = (raw_values[i] << (K+1)) | pos;
+            line_points[i] = (raw_values[i] << (conf.K+1)) | pos;
 
             if ((i > 0) && (line_points[i] < line_points[i-1]))
             {
@@ -248,8 +248,8 @@ uint8_t getK(string plot_fname)
     return header.k;
 }
 
-template <uint8_t K, uint32_t num_rows>
-void Plotter<K, num_rows>::read(string plot_fname, bool decompress) {
+template <PlotConf conf>
+void Plotter<conf>::read(string plot_fname, bool decompress) {
     if (decompress)
     {
         cout << "Importing and decompressing plot ";
@@ -290,12 +290,12 @@ void Plotter<K, num_rows>::read(string plot_fname, bool decompress) {
     }
 
     memcpy(this->id, header.id, sizeof(header.id));
-    if (K != header.k)
+    if (conf.K != header.k)
     {
-        cout << "K of file is " << header.k << ", not " << K << endl;
+        cout << "K of file is " << header.k << ", not " << conf.K << endl;
         return;
     }
-    assert(K == header.k);
+    assert(conf.K == header.k);
     SafeSeek(disk_file, offsetof(struct plot_header, fmt_desc) + fmt_desc_len);
 
     uint8_t size_buf[2];
