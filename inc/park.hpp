@@ -31,15 +31,15 @@ public:
 template <uint8_t delta_len>
 class DeltaPark : public Park {
 
-    static constexpr uint64_t entry_len_bits = delta_len;
+    //static constexpr uint64_t entry_len_bits = ((delta_len+7)/8)*8;
+    static constexpr uint64_t entry_len_bytes = ((delta_len+31)/32)*4;
 
 public:
     explicit DeltaPark(uint64_t num_entries_in) : Park(num_entries_in){}
 
     inline uint64_t GetSpaceNeeded()
     {
-        uint128_t bits_needed = entry_len_bits * num_entries;
-        return (bits_needed + 7) / 8;
+        return entry_len_bytes * num_entries;
     }
 
     inline void addEntries(std::vector<uint128_t>& src) override
@@ -47,7 +47,7 @@ public:
         start_value = src[0];
         uint128_t prev_linepoint_written = src[0];
 
-        std::span<bitpacker::byte_type> dest{data, GetSpaceNeeded()};
+        //std::span<bitpacker::byte_type> dest{data, GetSpaceNeeded()};
 
         for (uint32_t i = 0; i < num_entries; i++)
         {
@@ -55,17 +55,58 @@ public:
             assert(prev_linepoint_written <= src[i]);
             uint128_t delta = src[i] - prev_linepoint_written;
             prev_linepoint_written = src[i];
-            assert(delta < (1ULL << entry_len_bits));
-            bitpacker::insert(dest, i*entry_len_bits, entry_len_bits,  delta);
+            assert(delta < (1ULL << delta_len));
+
+
+            uint8_t* dest = data + i*entry_len_bytes;
+
+            if (entry_len_bytes <= 2)
+            {
+                *((uint16_t*)dest) = delta;
+            }
+            else if (entry_len_bytes <= 4)
+            {
+                *((uint32_t*)dest) = delta;
+            }
+            else if (entry_len_bytes <= 8)
+            {
+                *((uint64_t*)dest) = delta;
+            }
+            else
+            {
+                *((uint128_t*)dest) = delta;
+            }
+
+            //bitpacker::insert(dest, i*entry_len_bits, entry_len_bits,  delta);
         }
     }
     inline void readEntries(std::vector<uint128_t>& dest) override
     {
-        std::span<bitpacker::byte_type> src{data, GetSpaceNeeded()};
         uint128_t last_linepoint = start_value;
         for (uint32_t i = 0; i < num_entries; i++)
         {
-            uint128_t delta = bitpacker::extract<uint128_t>(src, i*entry_len_bits, entry_len_bits);
+            uint8_t* src = data + i*entry_len_bytes;
+            uint128_t mask = 1ULL << delta_len;
+            uint128_t delta;
+            if (entry_len_bytes <= 2)
+            {
+                delta = *((uint16_t*)src) % mask;
+            }
+            else if (entry_len_bytes <= 4)
+            {
+                delta = *((uint32_t*)src) % mask;
+            }
+            else if (entry_len_bytes <= 8)
+            {
+                delta = *((uint64_t*)src) % mask;
+            }
+            else
+            {
+                delta = *((uint128_t*)src) % mask;
+            }
+
+
+            //uint128_t delta = bitpacker::extract<uint128_t>(src, i*entry_len_bits, entry_len_bits);
             dest[i] = last_linepoint + delta;
             last_linepoint += delta;
         }

@@ -110,7 +110,11 @@ void Buffer::Truncate(uint64_t new_size)
 void Buffer::SwapOut()
 {
 	is_swapping = true;
-    munmap(data, mapped_len);
+    int ret = munmap(data, mapped_len);
+    if (ret)
+    {
+        throw std::runtime_error("Failed to munmap buffer");
+    }
     data = NULL;
     is_swapped = true;
     is_swapping = false;
@@ -130,12 +134,16 @@ void Buffer::SwapOutAsync()
 void Buffer::SwapIn(bool shared)
 {
 	is_swapping = true;
+	if (!is_file_backed)
+    {
+	    shared = false;
+    }
     is_shared = shared;
 	int flags = shared ? MAP_SHARED : MAP_PRIVATE;
     mapped_len = data_len;
     if (!is_file_backed)
     {
-        flags = MAP_ANONYMOUS|MAP_SHARED|MAP_NORESERVE;
+        flags |= MAP_ANONYMOUS|MAP_NORESERVE;
         if (use_hugepages)
         {
             flags |= MAP_HUGETLB;
@@ -143,11 +151,17 @@ void Buffer::SwapIn(bool shared)
         }
     }
     data = (uint8_t *) mmap(nullptr, mapped_len, PROT_READ|PROT_WRITE, flags, fd, 0);
+    if (data == MAP_FAILED)
+    {
+        throw std::runtime_error("Buffer mmap failed for " + to_string(mapped_len) + " bytes");
+    }
     if (!is_file_backed)
     {
-        madvise(data, mapped_len, MADV_DONTDUMP);
+        if (madvise(data, mapped_len, MADV_DONTDUMP))
+        {
+            throw std::runtime_error("Failed to madvise DONTDUMP for buffer");
+        }
     }
-    assert(data != MAP_FAILED);
     is_swapped = false;
     is_swapping = false;
 }

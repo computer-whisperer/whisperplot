@@ -19,7 +19,7 @@ void Plotter<conf>::phase3ThreadA(
         uint32_t cpu_id,
         atomic<uint64_t>* coordinator,
         vector<Park*>* temporary_parks,
-        entries_used_type* entries_used,
+        uint8_t* entries_used,
         vector<p2_final_positions_type>* final_positions,
         Buffer* output_buffer,
         vector<vector<Park*>>* final_parks,
@@ -62,7 +62,7 @@ void Plotter<conf>::phase3ThreadA(
                     {
 				        continue;
                     }
-				    if ((table_index == 5) || entries_used->get(old_pos).getY())
+				    if ((table_index == 5) || entries_used[old_pos])
                     {
 
 				        uint128_t line_point = temporary_park_line_points[i];
@@ -133,11 +133,11 @@ void Plotter<conf>::phase3DoTable()
 
     // Wait for the final positions table to be ready
     final_parks.emplace_back();
-    entries_used_type* current_entries_used = nullptr;
+    uint8_t* current_entries_used = nullptr;
     if (table_index < 5)
     {
         phase2b_threads[table_index].join();
-        current_entries_used = &(entries_used->at(table_index));
+        current_entries_used = entries_used[table_index];
     }
     final_table_begin_pointers[table_index] = bswap_64(*(output_buffer->insert_pos));
 

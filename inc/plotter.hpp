@@ -23,6 +23,8 @@ class Plotter
 {
 public:
 
+    static constexpr uint64_t max_entries_per_graph_table = (1ULL << conf.K)*1.1;
+
     static constexpr uint64_t GetMaxY(int8_t table_index)
     {
         if (table_index < 5)
@@ -87,74 +89,86 @@ public:
             uint64_t c : c_len_bits;
         };
 
-        static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + c_len_bits;
+        static constexpr uint64_t packed_y_len_bytes = ((parent::trimmed_y_len_bits+31)/32)*4;
+        static constexpr uint64_t packed_c_len_bytes = ((c_len_bits+31)/32)*4;
+
+        static constexpr uint64_t len_bits = (packed_y_len_bytes + packed_c_len_bytes)*8;
+        //static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + c_len_bits;
         //static constexpr uint64_t len_bits = sizeof(packed_type)*8;
         uint128_t c;
         inline void pack(uint8_t * dest, uint64_t offset) override
         {
             assert(this->y < GetMaxY(table_index)+1);
-            /*
-            struct packed_type temp;
-            temp.y = this->y;
-            temp.c = c;
-            memcpy(dest + offset/8, &temp, sizeof(temp));
-             */
 
-            /*
-
-            auto packed_dat = (struct packed_type*)dest;
-            packed_dat->y = this->y;
-            packed_dat->c = c;*/
-/*
             dest += offset/8;
-            uint128_t temp = this->y | (c << parent::trimmed_y_len_bits);
-            temp = bswap_128(temp);
-            memcpy(dest, &temp, (len_bits+7)/8);
-            */
-            std::span<uint8_t> s{dest, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+
+            if (packed_y_len_bytes <= 2)
             {
-                bitpacker::insert(s, offset, parent::trimmed_y_len_bits,  this->y);
+                *((uint16_t*)dest) = this->y;
             }
-            if (c_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                assert(c < (((uint128_t)(1ULL)) << c_len_bits));
-                bitpacker::insert(s, offset + parent::trimmed_y_len_bits, c_len_bits,  c);
+                *((uint32_t*)dest) = this->y;
+            }
+            else
+            {
+                *((uint64_t*)dest) = this->y;
+            }
+
+
+
+            if (packed_c_len_bytes <= 4)
+            {
+                *((uint32_t*)(dest + packed_y_len_bytes)) = c;
+            }
+            else if (packed_c_len_bytes <= 8)
+            {
+                *((uint64_t*)(dest + packed_y_len_bytes)) = c;
+            }
+            else
+            {
+                *((uint128_t*)(dest + packed_y_len_bytes)) = c;
             }
 
         }
 
         inline void unpack(uint8_t * src, uint64_t offset) override
         {
-            /*
-            struct packed_type temp;
-            memcpy(&temp, src + offset/8, sizeof(temp));
-            this->y = temp.y;
-            c = temp.c;
-             */
-            /*
             src += offset/8;
-            auto packed_dat = (struct packed_type*)src;
-            this->y = packed_dat->y;
-            c = packed_dat->c;
-*/
-            /*
-            src += offset/8;
-            uint128_t temp = 0;
-            memcpy(&temp, src, (len_bits+7)/8);
-            temp = bswap_128(temp);
-            this->y = temp % parent::row_divisor;
-            c = temp >> parent::trimmed_y_len_bits;
-            // = this->y | (c << parent::trimmed_y_len_bits);*/
-
-            std::span<uint8_t> s{src, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+            if (packed_y_len_bytes <= 2)
             {
-                this->y = bitpacker::extract<uint128_t>(s, offset, parent::trimmed_y_len_bits);
+                this->y = *((uint16_t*)src) % parent::row_divisor;
             }
-            if (c_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                c = bitpacker::extract<uint128_t>(s, offset + parent::trimmed_y_len_bits, c_len_bits);
+                this->y = *((uint32_t*)src) % parent::row_divisor;
+            }
+            else
+            {
+                this->y = *((uint64_t*)src) % parent::row_divisor;
+            }
+
+            uint128_t c_mask = 0;
+            if (c_len_bits == 128)
+            {
+                c_mask--;
+            }
+            else
+            {
+                c_mask = ((uint128_t)1) << c_len_bits;
+            }
+
+            if (packed_c_len_bytes <= 4)
+            {
+                c = *((uint32_t*)(src + packed_y_len_bytes)) % c_mask;
+            }
+            else if (packed_c_len_bytes <= 8)
+            {
+                c = *((uint64_t*)(src + packed_y_len_bytes)) % c_mask;
+            }
+            else
+            {
+                c = *((uint128_t*)(src + packed_y_len_bytes)) % c_mask;
             }
 
         }
@@ -166,34 +180,88 @@ public:
         using parent = PackedEntry<GetMaxY(table_index)/kBC, GetMaxY(table_index)+1, GetMeanEntryCount(table_index)>;
     public:
         static constexpr uint64_t c_len_bits = GetCLen(table_index);
-        static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + c_len_bits;
         uint128_t c;
+
+        static constexpr uint64_t packed_y_len_bytes = ((parent::trimmed_y_len_bits+31)/32)*4;
+        static constexpr uint64_t packed_c_len_bytes = ((c_len_bits+31)/32)*4;
+
+        static constexpr uint64_t len_bits = (packed_y_len_bytes + packed_c_len_bytes)*8;
+
         inline void pack(uint8_t * dest, uint64_t offset) override
         {
             assert(this->y < GetMaxY(table_index)+1);
-            std::span<uint8_t> s{dest, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+
+            dest += offset/8;
+
+            if (packed_y_len_bytes <= 2)
             {
-                bitpacker::insert(s, offset, parent::trimmed_y_len_bits,  this->y);
+                *((uint16_t*)dest) = this->y;
             }
-            if (c_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                assert(c < (((uint128_t)(1ULL)) << c_len_bits));
-                bitpacker::insert(s, offset + parent::trimmed_y_len_bits, c_len_bits,  c);
+                *((uint32_t*)dest) = this->y;
             }
+            else
+            {
+                *((uint64_t*)dest) = this->y;
+            }
+
+
+
+            if (packed_c_len_bytes <= 4)
+            {
+                *((uint32_t*)(dest + packed_y_len_bytes)) = c;
+            }
+            else if (packed_c_len_bytes <= 8)
+            {
+                *((uint64_t*)(dest + packed_y_len_bytes)) = c;
+            }
+            else
+            {
+                *((uint128_t*)(dest + packed_y_len_bytes)) = c;
+            }
+
         }
 
         inline void unpack(uint8_t * src, uint64_t offset) override
         {
-            std::span<uint8_t> s{src, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+            src += offset/8;
+            if (packed_y_len_bytes <= 2)
             {
-                this->y = bitpacker::extract<uint128_t>(s, offset, parent::trimmed_y_len_bits);
+                this->y = *((uint16_t*)src) % parent::row_divisor;
             }
-            if (c_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                c = bitpacker::extract<uint128_t>(s, offset + parent::trimmed_y_len_bits, c_len_bits);
+                this->y = *((uint32_t*)src) % parent::row_divisor;
             }
+            else
+            {
+                this->y = *((uint64_t*)src) % parent::row_divisor;
+            }
+
+            uint128_t c_mask = 0;
+            if (c_len_bits == 128)
+            {
+                c_mask--;
+            }
+            else
+            {
+                c_mask = ((uint128_t)1) << c_len_bits;
+            }
+
+            if (packed_c_len_bytes <= 4)
+            {
+                c = *((uint32_t*)(src + packed_y_len_bytes)) % c_mask;
+            }
+            else if (packed_c_len_bytes <= 8)
+            {
+                c = *((uint64_t*)(src + packed_y_len_bytes)) % c_mask;
+            }
+            else
+            {
+                c = *((uint128_t*)(src + packed_y_len_bytes)) % c_mask;
+            }
+
         }
     };
 
@@ -203,40 +271,205 @@ public:
         using parent = PackedEntry<conf.num_rows, GetMaxLinePoint(table_index)+1, GetMeanEntryCount(table_index)*2>;
     public:
         static constexpr uint64_t uid_len_bits = conf.K+2;
-        static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + uid_len_bits;
+   //     static constexpr uint64_t len_bits = parent::trimmed_y_len_bits + uid_len_bits;
+
+        static constexpr uint64_t packed_y_len_bytes = ((parent::trimmed_y_len_bits+31)/32)*4;
+        static constexpr uint64_t packed_uid_len_bytes = ((uid_len_bits+31)/32)*4;
+
+        static constexpr uint64_t len_bits = (packed_y_len_bytes + packed_uid_len_bytes)*8;
+
         uint64_t uid;
+
         inline void pack(uint8_t * dest, uint64_t offset) override
         {
             assert(this->y < GetMaxLinePoint(table_index)+1);
-            std::span<uint8_t> s{dest, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+
+            dest += offset/8;
+
+            if (packed_y_len_bytes <= 2)
             {
-                bitpacker::insert(s, offset, parent::trimmed_y_len_bits,  this->y);
+                *((uint16_t*)dest) = this->y;
             }
-            if (uid_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                assert(uid < (1ULL << uid_len_bits));
-                bitpacker::insert(s, offset + parent::trimmed_y_len_bits, uid_len_bits,  uid);
+                *((uint32_t*)dest) = this->y;
             }
+            else if (packed_y_len_bytes <= 8)
+            {
+                *((uint64_t*)dest) = this->y;
+            }
+            else
+            {
+                *((uint128_t*)dest) = this->y;
+            }
+
+
+
+            if (packed_uid_len_bytes <= 4)
+            {
+                *((uint32_t*)(dest + packed_y_len_bytes)) = uid;
+            }
+            else if (packed_uid_len_bytes <= 8)
+            {
+                *((uint64_t*)(dest + packed_y_len_bytes)) = uid;
+            }
+            else
+            {
+                *((uint128_t*)(dest + packed_y_len_bytes)) = uid;
+            }
+
         }
 
         inline void unpack(uint8_t * src, uint64_t offset) override
         {
-            std::span<uint8_t> s{src, (offset + len_bits + 7)/8};
-            if (parent::trimmed_y_len_bits)
+            src += offset/8;
+
+
+            if (packed_y_len_bytes <= 2)
             {
-                this->y = bitpacker::extract<uint64_t>(s, offset, parent::trimmed_y_len_bits);
+                this->y = *((uint16_t*)src) % parent::row_divisor);
             }
-            if (uid_len_bits)
+            else if (packed_y_len_bytes <= 4)
             {
-                uid = bitpacker::extract<uint64_t>(s, offset + parent::trimmed_y_len_bits, uid_len_bits);
+                this->y = *((uint32_t*)src) % parent::row_divisor;
             }
+            else if (packed_y_len_bytes <= 8)
+            {
+                this->y = *((uint64_t*)src) % parent::row_divisor;
+            }
+            else
+            {
+                this->y = *((uint128_t*)src) % parent::row_divisor;
+            }
+
+            uint128_t uid_mask = 0;
+            if (uid_len_bits == 128)
+            {
+                uid_mask--;
+            }
+            else
+            {
+                uid_mask = ((uint128_t)1) << uid_len_bits;
+            }
+
+            if (packed_uid_len_bytes <= 4)
+            {
+                uid = *((uint32_t*)(src + packed_y_len_bytes)) % uid_mask;
+            }
+            else if (packed_uid_len_bytes <= 8)
+            {
+                uid = *((uint64_t*)(src + packed_y_len_bytes)) % uid_mask;
+            }
+            else
+            {
+                uid = *((uint128_t*)(src + packed_y_len_bytes)) % uid_mask;
+            }
+
+        }
+
+    };
+
+    template<int8_t table_index>
+    class PositionPackedEntry : public PackedEntry<conf.num_rows, max_entries_per_graph_table, GetMeanEntryCount(table_index)>
+    {
+        using parent = PackedEntry<conf.num_rows, max_entries_per_graph_table, GetMeanEntryCount(table_index)>;
+
+        // Y of this packed entry represents the UID of the other entry that maps to this entry
+    public:
+        static constexpr uint64_t pos_len_bits = K+1;
+
+        static constexpr uint64_t packed_y_len_bytes = ((parent::trimmed_y_len_bits+31)/32)*4;
+        static constexpr uint64_t packed_pos_len_bytes = ((pos_len_bits+31)/32)*4;
+
+        static constexpr uint64_t len_bits = (packed_y_len_bytes + packed_c_len_bytes)*8;
+        uint64_t pos;
+        inline void pack(uint8_t * dest, uint64_t offset) override
+        {
+            assert(this->y < GetMaxY(table_index)+1);
+
+            dest += offset/8;
+
+            if (packed_y_len_bytes <= 2)
+            {
+                *((uint16_t*)dest) = this->y;
+            }
+            else if (packed_y_len_bytes <= 4)
+            {
+                *((uint32_t*)dest) = this->y;
+            }
+            else
+            {
+                *((uint64_t*)dest) = this->y;
+            }
+
+
+            if (packed_pos_len_bytes <= 2)
+            {
+                *((uint16_t*)(dest + packed_y_len_bytes)) = pos;
+            }
+            else if (packed_pos_len_bytes <= 4)
+            {
+                *((uint32_t*)(dest + packed_y_len_bytes)) = pos;
+            }
+            else if (packed_pos_len_bytes <= 8)
+            {
+                *((uint64_t*)(dest + packed_y_len_bytes)) = pos;
+            }
+            else
+            {
+                *((uint128_t*)(dest + packed_y_len_bytes)) = pos;
+            }
+
+        }
+
+        inline void unpack(uint8_t * src, uint64_t offset) override
+        {
+            src += offset/8;
+            if (packed_y_len_bytes <= 2)
+            {
+                this->y = *((uint16_t*)src) % parent::row_divisor;
+            }
+            else if (packed_y_len_bytes <= 4)
+            {
+                this->y = *((uint32_t*)src) % parent::row_divisor;
+            }
+            else
+            {
+                this->y = *((uint64_t*)src) % parent::row_divisor;
+            }
+
+            uint64_t pos_mask = 0;
+            if (pos_len_bits == 64)
+            {
+                pos_mask--;
+            }
+            else
+            {
+                pos_mask = ((uint64_t)1) << pos_mask;
+            }
+
+            if (packed_c_len_bytes <= 2)
+            {
+                pos = *((uint16_t*)(src + packed_y_len_bytes)) % pos_mask;
+            }
+            else if (packed_c_len_bytes <= 4)
+            {
+                pos = *((uint32_t*)(src + packed_y_len_bytes)) % pos_mask;
+            }
+            else if (packed_c_len_bytes <= 8)
+            {
+                pos = *((uint64_t*)(src + packed_y_len_bytes)) % pos_mask;
+            }
+            else
+            {
+                pos = *((uint128_t*)(src + packed_y_len_bytes)) % pos_mask;
+            }
+
         }
     };
 
     static constexpr uint8_t line_point_delta_len_bits = conf.K + 10;
     static constexpr uint8_t finaltable_y_delta_len_bits = conf.K + 10;
-    static constexpr uint64_t max_entries_per_graph_table = (1ULL << conf.K)*1.1;
 
     std::vector<Buffer*> buffers;
     std::vector<std::vector<Park*>> phase1_graph_parks;
@@ -272,9 +505,9 @@ public:
     void check_full_table(uint8_t table_index);
 
     using p2_final_positions_type = PackedArray<PackedEntry<1, 1ULL << (conf.K+1), 1>, max_entries_per_graph_table>;
-    using entries_used_type = BasePackedArray<BooleanPackedEntry, max_entries_per_graph_table, 8>;
+    //using entries_used_type = BasePackedArray<BooleanPackedEntry, max_entries_per_graph_table, 8>;
 
-    using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(conf.K+1)), 1>, (1ULL<<(conf.K+1)), 8>;
+    //using phase1_new_positions_type = BasePackedArray<PackedEntry<1, (1ULL<<(conf.K+1)), 1>, (1ULL<<(conf.K+1)), 32>;
 
     template <int8_t table_index>
     using p1_buckets_done_type = BasePackedArray<BooleanPackedEntry, GetMaxY(table_index)/kBC + 1, 8>;
@@ -287,8 +520,8 @@ private:
     uint32_t memo_size;
     std::vector<std::thread> phase2b_threads;
     std::vector<uint32_t> cpu_ids;
-    std::map<uint32_t, phase1_new_positions_type*> phase1_new_entry_positions;
-    std::vector<entries_used_type>* entries_used;
+    std::map<uint32_t, vector<uint64_t>> phase1_new_entry_positions;
+    std::vector<uint8_t*> entries_used;
     std::vector<p2_final_positions_type>* phase2_final_positions;
     uint64_t final_table_begin_pointers[10];
     uint64_t pointer_table_offset;
@@ -302,14 +535,17 @@ private:
     );
 
     template <int8_t table_index>
+    struct phase1TableData {
+        std::map<uint32_t, Penguin<YCPackedEntry<table_index>, conf.interlace_factor>*> bucket_penguins;
+        std::map<uint32_t, Penguin<PositionPackedEntry<table_index>, conf.interlace_factor>*> position_penguins;
+    };
+
+    template <int8_t table_index>
     static void phase1ThreadB(
             uint32_t cpu_id,
             const uint8_t* id,
             std::atomic<uint64_t>* coordinator,
-            p1_buckets_done_type<table_index-1> * bucket_left_done,
-            p1_buckets_done_type<table_index-1> * bucket_right_done,
-            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor>*>* prev_penguins,
+            phase1TableData<table_index-1> prev_table_data,
             Penguin<YCPackedEntry<table_index>, conf.interlace_factor>* new_yc_penguin,
             Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>* new_line_point_penguin);
 
@@ -318,7 +554,7 @@ private:
             uint32_t cpu_id,
             const uint8_t* id,
             std::atomic<uint64_t>* coordinator,
-            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
+            std::map<uint32_t, Penguin<PositionPackedEntry<table_index>, conf.interlace_factor>*> position_penguins,
             std::map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>*> line_point_penguin,
             std::vector<Park*> *parks,
             Buffer* buffer
@@ -327,27 +563,26 @@ private:
     static void phase1ThreadD(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
-            std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
+            std::map<uint32_t, uint64_t*>& new_entry_positions,
             std::map<uint32_t, Penguin<YCPackedEntry<5>, conf.interlace_factor>*> line_point_penguins,
             std::vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
             Buffer* buffer
     );
 
     template <int8_t table_index>
-    std::map<uint32_t, Penguin<YCPackedEntry<table_index>, conf.interlace_factor>*> phase1DoTable(
-            std::map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor>*> prev_bucket_indexes);
+    phase1TableData<table_index> phase1DoTable(phase1TableData<table_index-1> prev_table_data);
 
     template <int8_t table_index>
     static void phase2ThreadA(
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
             std::vector<Park*>* parks,
-            entries_used_type* current_entries_used,
-            entries_used_type* prev_entries_used
+            uint8_t* current_entries_used,
+            uint8_t* prev_entries_used
     );
 
     static void phase2ThreadB(
-            entries_used_type* entries_used,
+            uint8_t* entries_used,
             p2_final_positions_type* final_positions);
 
     template <int8_t table_index>
@@ -358,7 +593,7 @@ private:
             uint32_t cpu_id,
             std::atomic<uint64_t>* coordinator,
             std::vector<Park*>* temporary_parks,
-            entries_used_type* entries_used,
+            uint8_t* entries_used,
             std::vector<p2_final_positions_type>* final_positions,
             Buffer* output_buffer,
             std::vector<std::vector<Park*>>* final_parks,

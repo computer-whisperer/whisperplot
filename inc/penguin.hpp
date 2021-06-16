@@ -15,7 +15,7 @@
 template <class entry_type, uint32_t interlace_factor>
 class Penguin
 {
-    static constexpr bool use_hugepages = true;
+    static constexpr bool use_hugepages = false;
 
     static constexpr uint64_t hugepage_len = 1ULL << 21;
 
@@ -29,7 +29,7 @@ class Penguin
     std::atomic<uint64_t> entry_counts[sort_row_count];
     Row* rows[store_row_count];
 
-    static constexpr uint64_t row_size_bytes = ((sizeof(Row) + hugepage_len - 1)/hugepage_len)*hugepage_len;
+    static constexpr uint64_t row_size_bytes = use_hugepages ?  ((sizeof(Row) + hugepage_len - 1)/hugepage_len)*hugepage_len : sizeof(Row);
 
 public:
     inline Penguin()
@@ -42,18 +42,18 @@ public:
             rows[i] = (Row *) test;
             if (test == nullptr)
             {
-                std::cerr << "Failed to mmap:" << strerror(errno) << std::endl;
+                throw std::runtime_error("Failed to mmap for penguin");
             }
 
             if (madvise(test, row_size_bytes, MADV_DONTDUMP))
             {
-                std::cerr << "Failed to MADV_DONTDUMP:" << strerror(errno) << std::endl;
+                throw std::runtime_error("Failed to MADV_DONTDUMP for penguin");
             }
         /*    if (use_hugepages)
             {
                 if (madvise(test, row_size_bytes, MADV_HUGEPAGE))
                 {
-                    std::cerr << "Failed to MADV_HUGEPAGE:" << strerror(errno) << std::endl;
+                    throw std::runtime_error("Failed to MADV_HUGEPAGE for penguin");
                 }
             }*/
         }
@@ -61,9 +61,12 @@ public:
         {
             it = 0;
         }
-        for (auto& it : pop_counts)
+        if (interlace_factor > 1)
         {
-            it = 0;
+            for (auto& it : pop_counts)
+            {
+                it = 0;
+            }
         }
     }
 
@@ -71,19 +74,13 @@ public:
     {
         for (uint32_t i = 0; i < store_row_count; i++)
         {
-            if (use_hugepages)
+            if (1 || use_hugepages)
             {
-                if (munmap(rows[i], row_size_bytes))
-                {
-                    std::cerr << "Failed to munmap:" << strerror(errno) << std::endl;
-                }
+                munmap(rows[i], row_size_bytes);
             }
             else
             {
-                if (madvise(rows[i], row_size_bytes, MADV_FREE))
-                {
-                    std::cerr << "Failed to MADV_FREE:" << strerror(errno) << std::endl;
-                }
+                madvise(rows[i], row_size_bytes, MADV_FREE);
             }
         }
     }
@@ -119,9 +116,10 @@ public:
         assert(row_id < sort_row_count);
 
         uint64_t store_row_id = row_id/interlace_factor;
-        pop_counts[store_row_id]++;
+        if (interlace_factor > 1)
+            pop_counts[store_row_id]++;
 
-        if (pop_counts[store_row_id] == interlace_factor)
+        if ((interlace_factor == 1) || (pop_counts[store_row_id] == interlace_factor))
         {
             if (use_hugepages)
             {

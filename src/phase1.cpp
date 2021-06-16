@@ -56,10 +56,7 @@ void Plotter<conf>::phase1ThreadB(
         uint32_t cpu_id,
         const uint8_t* id,
         std::atomic<uint64_t> * coordinator,
-        p1_buckets_done_type<table_index-1> * bucket_left_done,
-        p1_buckets_done_type<table_index-1> * bucket_right_done,
-        std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
-        map<uint32_t, Penguin<YCPackedEntry<table_index - 1>, conf.interlace_factor> *> *prev_penguins,
+        phase1TableData<table_index-1> prev_table_data,
         Penguin<YCPackedEntry<table_index>, conf.interlace_factor> * new_yc_penguin,
         Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor> * new_line_point_penguin)
 {
@@ -98,6 +95,7 @@ void Plotter<conf>::phase1ThreadB(
     while (true)
     {
         uint64_t bucket_id = coordinator->fetch_add(batchSize);
+        uint64_t first_bucket_id_in_batch = bucket_id;
         if (bucket_id > bc_bucket_num-1)
             break;
         for (uint32_t k = 0; k < batchSize; k++)
@@ -155,12 +153,11 @@ void Plotter<conf>::phase1ThreadB(
                         temp_entry.setY(entry.getY());
                         temp_entry.c = entry.c;
                         temp_buckets[bucket_of_entry%temp_buckets_needed].set(bucket_entry_id, temp_entry);
-                        auto test_entry = temp_buckets[bucket_of_entry%temp_buckets_needed].get(bucket_entry_id);
-                        test_entry.row = bucket_of_entry;
                         if (table_index > 0)
                         {
                             uint64_t uid = penguin->getUniqueIdentifier(row_id, entry_id);
-                            uint64_t new_position = (*new_entry_positions)[numa_node]->get(uid).getY();
+                            assert(uid < max_entries_per_graph_table);
+                            uint64_t new_position = (*new_entry_positions)[numa_node][uid];
                             entry_positions[bucket_of_entry%temp_buckets_needed].push_back(new_position);
                         }
                     }
@@ -173,37 +170,17 @@ void Plotter<conf>::phase1ThreadB(
                 {
                     latest_bucket_finished_load = bc_bucket_num;
                 }
-            }
-            if (bucket_id%bucket_id)
 
-            bucket_left_done->set(bucket_id, BooleanPackedEntry(true));
-            bucket_right_done->set(bucket_id+1, BooleanPackedEntry(true));
-
-            // Check all rows that contribute to either bucket_id and pop them if possible
-            uint64_t first_row_possible = (bucket_id*kBC)/old_yc::row_divisor;
-            uint64_t last_row_possible = ((bucket_id+2)*kBC - 1)/old_yc::row_divisor;
-            for (uint32_t row_id = first_row_possible; row_id <= last_row_possible; row_id++)
-            {
-                // Check if all buckets in this row are finished
-                uint64_t first_bucket_contained = (row_id*old_yc::row_divisor)/kBC;
-                uint64_t last_bucket_contained = ((row_id+1)*old_yc::row_divisor - 1)/kBC;
-                uint32_t i;
-                for (i = first_bucket_contained; i <= last_bucket_contained; i++)
+                // If this row only contains entries relevant to this batch of buckets, pop it
+                if ((first_bucket_needed > first_bucket_id_in_batch) &&
+                        (last_bucket_needed < (first_bucket_id_in_batch + batchSize)))
                 {
-                    if (!bucket_left_done->get(i).getY() || !bucket_right_done->get(i).getY())
-                    {
-                        break;
-                    }
-                }
-                if (i > last_bucket_contained)
-                {
-                    // All checks passed, this row can be popped
                     for (auto& [numa_node, penguin] : *prev_penguins) {
                         penguin->popRow(row_id);
                     }
                 }
+                // TODO: pop the borderline entries somehow
             }
-
 
             // Process sort_row and sort_row + 1
             uint16_t parity = bucket_id % 2;
@@ -272,8 +249,7 @@ void Plotter<conf>::phase1ThreadB(
                         line_point_entry.uid = new_yc_penguin->getUniqueIdentifier(sort_row,
                                                                                          new_entry_id);
                         assert(line_point_entry.uid < (1ULL << (conf.K + 2)));
-                        uint32_t test_row_id = line_point_entry.row;
-                        uint32_t test_entry_id = new_line_point_penguin->addEntry(line_point_entry);
+                        new_line_point_penguin->addEntry(line_point_entry);
                     }
                 }
 
@@ -292,7 +268,7 @@ void Plotter<conf>::phase1ThreadC(
         uint32_t cpu_id,
         const uint8_t* id,
         std::atomic<uint64_t>* coordinator,
-        std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
+        std::map<uint32_t, uint64_t*>* new_entry_positions,
         map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor> *> line_point_penguin,
         vector<Park*> *parks,
         Buffer* buffer)
@@ -371,8 +347,8 @@ void Plotter<conf>::phase1ThreadC(
         for (uint64_t i = 0; i < num_entries; i++)
         {
             line_points[i] = entries[i].second.getY();
-            assert(entries[i].second.uid < (1ULL<<(conf.K+2)));
-            (*new_entry_positions)[entries[i].first]->set(entries[i].second.uid, PackedEntry<1, (1ULL<<(conf.K+1)), 1>(i + total_entries_so_far));
+            assert(entries[i].second.uid < max_entries_per_graph_table);
+            (*new_entry_positions)[entries[i].first][entries[i].second.uid] = i + total_entries_so_far;
         }
         new_park->addEntries(line_points);
         (*parks)[row_id] = new_park;
@@ -383,7 +359,7 @@ template <PlotConf conf>
 void Plotter<conf>::phase1ThreadD(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
-        std::map<uint32_t, phase1_new_positions_type*>* new_entry_positions,
+        std::map<uint32_t, uint64_t*>& new_entry_positions,
         std::map<uint32_t, Penguin<YCPackedEntry<5>, conf.interlace_factor>*> line_point_penguins,
         vector<DeltaPark<finaltable_y_delta_len_bits> *> *parks,
         Buffer* buffer)
@@ -416,7 +392,7 @@ void Plotter<conf>::phase1ThreadD(
             uint64_t entries_in_numa = penguin->getCountInRow(row_id);
             for (uint64_t i = 0; i < entries_in_numa; i++)
             {
-                uint64_t new_pos = (*new_entry_positions)[numa_node]->get(penguin->getUniqueIdentifier(row_id, i)).getY();
+                uint64_t new_pos = new_entry_positions[numa_node][penguin->getUniqueIdentifier(row_id, i)];
                 auto e = penguin->readEntry(row_id, i);
                 e.setYtemp(e.getY()<<(conf.K+1) | new_pos);
                 entries.push_back(e);
@@ -451,26 +427,19 @@ using test_type = typename Plotter<conf>::template YCPackedEntry<table_index>;
 
 template <PlotConf conf>
 template <int8_t table_index>
-map<uint32_t, Penguin<typename Plotter<conf>::template YCPackedEntry<table_index>, conf.interlace_factor>*> Plotter<conf>::phase1DoTable(
-        map<uint32_t, Penguin<YCPackedEntry<table_index-1>, conf.interlace_factor>*> prev_penguins)
+typename Plotter<conf>::template phase1TableData<table_index> Plotter<conf>::phase1DoTable(phase1TableData<table_index-1> prev_table_data)
 {
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".0S");
+    // StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".0S");
 
-    map<uint32_t, Penguin<YCPackedEntry<table_index>, conf.interlace_factor>*> next_bucket_indexes;
     map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>*> new_line_point_penguins;
+    phase1TableData<table_index> new_table_data;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        next_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<table_index>, conf.interlace_factor>();
+        new_table_data.bucket_penguins[numa_node] = new Penguin<YCPackedEntry<table_index>, conf.interlace_factor>();
         new_line_point_penguins[numa_node] = new Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>();
     }
-    auto * bucket_left_done = new p1_buckets_done_type<table_index-1>();
-    bucket_left_done->fill(BooleanPackedEntry(false));
-    auto * bucket_right_done = new p1_buckets_done_type<table_index-1>();
-    bucket_right_done->fill(BooleanPackedEntry(false));
-    bucket_left_done->set(0, BooleanPackedEntry(true));
-    bucket_right_done->set(GetMaxY(table_index)/kBC - 1, BooleanPackedEntry(true));
 
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".1M");
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".0M");
 
     vector<thread> threads;
     std::atomic<uint64_t> coordinator = 0;
@@ -482,11 +451,8 @@ map<uint32_t, Penguin<typename Plotter<conf>::template YCPackedEntry<table_index
                 cpu_id,
                 id,
                 &coordinator,
-                bucket_left_done,
-                bucket_right_done,
-                &phase1_new_entry_positions,
-                &prev_penguins,
-                next_bucket_indexes[numa_node],
+                prev_table_data,
+                new_table_data.bucket_penguins[numa_node],
                 new_line_point_penguins[numa_node]));
     }
 
@@ -494,27 +460,20 @@ map<uint32_t, Penguin<typename Plotter<conf>::template YCPackedEntry<table_index
     {
         it.join();
     }
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".1S");
 
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".2S");
-
-    delete bucket_left_done;
-    delete bucket_right_done;
-
+    map<uint32_t, Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>*> new_position_penguins;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids)) {
-        delete prev_penguins[numa_node];
+        delete prev_bucket_penguins[numa_node];
+        new_position_penguins[numa_node] = new Penguin<LinePointUIDPackedEntry<table_index>, conf.interlace_factor>();
     }
-
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".3S");
-
-// Unfortunately single-threaded, but not much can be done to help it
-    //new_line_point_bucket_index->SumBucketOffsets();
 
 // Setup the new park list and buffer
     DeltaPark<line_point_delta_len_bits> test_park(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
     buffers.push_back(new Buffer(test_park.GetSpaceNeeded() * LinePointUIDPackedEntry<table_index>::num_rows_v));
     phase1_graph_parks.push_back(vector<Park*>(LinePointUIDPackedEntry<table_index>::num_rows_v));
 
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".4M");
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".2M");
 
     coordinator = 0;
     threads.clear();
@@ -536,13 +495,12 @@ map<uint32_t, Penguin<typename Plotter<conf>::template YCPackedEntry<table_index
     {
         it.join();
     }
-
-    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".5S");
+    StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + ".3S");
 
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids)) {
         delete new_line_point_penguins[numa_node];
     }
-    return next_bucket_indexes;
+    return next_yc_penguins;
 }
 
 
@@ -552,13 +510,12 @@ void Plotter<conf>::phase1()
     StatusUpdate::StartSeg("0.-1.0S");
     load_tables();
 
-
     uint64_t phase_start_seconds = time(nullptr);
 
-    map<uint32_t, Penguin<YCPackedEntry<-1>, conf.interlace_factor>*> first_bucket_indexes;
+    map<uint32_t, Penguin<YCPackedEntry<-1>, conf.interlace_factor>*> first_penguins;
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        first_bucket_indexes[numa_node] = new Penguin<YCPackedEntry<-1>, conf.interlace_factor>();
+        first_penguins[numa_node] = new Penguin<YCPackedEntry<-1>, conf.interlace_factor>();
     }
 
     StatusUpdate::StartSeg("0.-1.1M");
@@ -573,7 +530,7 @@ void Plotter<conf>::phase1()
                 cpu_id,
                 &coordinator,
                 id,
-                first_bucket_indexes[numa_node]));
+                first_penguins[numa_node]));
     }
 
     for (auto &it: threads)
@@ -586,10 +543,10 @@ void Plotter<conf>::phase1()
 
     for (auto& numa_node : GetNUMANodesFromCpuIds(cpu_ids))
     {
-        phase1_new_entry_positions[numa_node] = (phase1_new_positions_type*) malloc(sizeof(phase1_new_positions_type));
+        phase1_new_entry_positions[numa_node].resize(max_entries_per_graph_table/GetNUMANodesFromCpuIds(cpu_ids).size());
     }
 
-    auto i0 = phase1DoTable<0>(first_bucket_indexes);
+    auto i0 = phase1DoTable<0>(first_penguins);
     auto i1 = phase1DoTable<1>(i0);
     auto i2 = phase1DoTable<2>(i1);
     auto i3 = phase1DoTable<3>(i2);
@@ -621,7 +578,7 @@ void Plotter<conf>::phase1()
                 Plotter<conf>::phase1ThreadD,
                 cpu_id,
                 &coordinator,
-                &phase1_new_entry_positions,
+                ref(phase1_new_entry_positions),
                 i5,
                 &phase1_final_parks,
                 buffers[6]));

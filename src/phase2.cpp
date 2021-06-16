@@ -20,8 +20,8 @@ void Plotter<conf>::phase2ThreadA(
         uint32_t cpu_id,
         std::atomic<uint64_t>* coordinator,
         vector<Park*>* parks,
-        entries_used_type* current_entries_used,
-        entries_used_type* prev_entries_used
+        uint8_t* current_entries_used,
+        uint8_t* prev_entries_used
         )
 {
     PinToCpuid(cpu_id);
@@ -39,11 +39,11 @@ void Plotter<conf>::phase2ThreadA(
 
 		for (uint64_t i = 0; i < line_points.size(); i++)
         {
-		    if ((table_index == 5) || (current_entries_used->get(parks->at(park_id)->start_pos + i).getY()))
+		    if ((table_index == 5) || (current_entries_used[parks->at(park_id)->start_pos + i]))
             {
                 auto res = Encoding::LinePointToSquare(line_points[i]);
-                prev_entries_used->set(res.first, BooleanPackedEntry(true));
-                prev_entries_used->set(res.second, BooleanPackedEntry(true));
+                prev_entries_used[res.first] = 1;
+                prev_entries_used[res.second] = 1;
             }
         }
 	}
@@ -51,7 +51,7 @@ void Plotter<conf>::phase2ThreadA(
 
 template <PlotConf conf>
 void Plotter<conf>::phase2ThreadB(
-        entries_used_type* entries_used,
+        uint8_t* entries_used,
         p2_final_positions_type* final_positions
 )
 {
@@ -59,7 +59,7 @@ void Plotter<conf>::phase2ThreadB(
     for (uint64_t i = 0; i < max_entries_per_graph_table; i++)
     {
         final_positions->set(i, PackedEntry<1, 1ULL << (conf.K+1), 1>(new_pos));
-        new_pos += entries_used->get(i).getY();
+        new_pos += entries_used[i];
     }
 }
 
@@ -70,16 +70,18 @@ void Plotter<conf>::phase2DoTable()
 {
     StatusUpdate::StartSeg("1." + to_string((uint32_t)table_index) + ".0S");
 
-    memset(&(entries_used->at(table_index-1)), 0, sizeof(entries_used_type));
+    entries_used[table_index-1] = (uint8_t*)malloc(max_entries_per_graph_table);
+    memset(entries_used[table_index-1], 0, max_entries_per_graph_table);
+
     uint64_t start_seconds = time(nullptr);
 
     StatusUpdate::StartSeg("1." + to_string((uint32_t)table_index) + ".1M");
 
     vector<thread> threads;
-    entries_used_type * current_entries_used = nullptr;
+    uint8_t * current_entries_used = nullptr;
     if(table_index != 5)
     {
-        current_entries_used = &(entries_used->at(table_index));
+        current_entries_used = entries_used[table_index];
     }
     std::atomic<uint64_t> coordinator = 0;
     for (auto & cpu_id : cpu_ids)
@@ -90,7 +92,7 @@ void Plotter<conf>::phase2DoTable()
                 &coordinator,
                 &(phase1_graph_parks[table_index]),
                 current_entries_used,
-                &(entries_used->at(table_index-1))));
+                entries_used[table_index-1]));
     }
 
     for (auto &it: threads)
@@ -101,7 +103,7 @@ void Plotter<conf>::phase2DoTable()
     // Start final position sum thread
     phase2b_threads[table_index-1] = thread(
             Plotter<conf>::phase2ThreadB,
-            &(entries_used->at(table_index-1)),
+            entries_used[table_index-1],
             &(phase2_final_positions->at(table_index - 1)));
 }
 
@@ -110,7 +112,7 @@ template <PlotConf conf>
 void Plotter<conf>::phase2()
 {
     StatusUpdate::StartSeg("1.-1.0S");
-    entries_used = new vector<entries_used_type>(5);
+    entries_used.resize(5);
     phase2_final_positions = new vector<p2_final_positions_type>(5);
     phase2b_threads.resize(5);
     // Start final position sum thread

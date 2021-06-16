@@ -38,6 +38,9 @@ void createPlot(const uint8_t* id_in, uint8_t* memo_in, uint32_t memo_size_in, s
     uint64_t start_seconds = time(nullptr);
     auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(id_in, memo_in, memo_size_in, cpu_ids, filename);
     res->phase1();
+    res->check_parks_integrity();
+    res->check_full_table(0);
+    res->find_many_proofs(100);
     res->phase2();
     res->phase3();
     res->phase4();

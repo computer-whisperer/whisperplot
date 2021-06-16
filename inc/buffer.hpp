@@ -26,7 +26,7 @@ extern bool buffer_use_tmp;
 
 class Buffer
 {
-    static constexpr bool use_hugepages = true;
+    static constexpr bool use_hugepages = false;
     static constexpr uint64_t hugepage_len = 1ULL << 21;
 
     uint64_t mapped_len;
