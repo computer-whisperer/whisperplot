@@ -79,14 +79,9 @@ include_directories(
 
 add_executable(whisperplot
         src/main.cpp
-        src/phase1.cpp
-        src/phase2.cpp
-        src/phase3.cpp
-        src/phase4.cpp
-        src/buffer.cpp
-        src/check.cpp
+        src/create.cpp
+        src/prove.cpp
         src/status_update.cpp
-        src/read.cpp
         src/encoding.cpp
         src/calculate_bucket.cpp
         chiapos_inc/chacha8.c

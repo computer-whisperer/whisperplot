@@ -33,25 +33,20 @@ string Strip0x(const string &hex)
 using namespace std;
 
 template<uint8_t K>
-void createPlot(const uint8_t* id_in, uint8_t* memo_in, uint32_t memo_size_in, std::vector<uint32_t> cpu_ids, std::string filename)
+void createPlot(std::array<uint8_t, 32> id_in, vector<uint8_t> memo_in, std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(id_in, memo_in, memo_size_in, cpu_ids, filename);
-    res->phase1();
-    res->check_parks_integrity();
-    res->check_full_table(0);
+    auto res = new Plotter<PlotConf(K, global_num_rows, global_interlace_factor)>(cpu_ids);
+    res->create(id_in);
     res->find_many_proofs(100);
-    res->phase2();
-    res->phase3();
-    res->phase4();
     cout << "Plot create finished in " << time(nullptr) - start_seconds << "s" << endl;
 }
-
+/*
 template<uint8_t K>
 void checkPlotFull(std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(cpu_ids);
+    auto res = new Plotter<PlotConf(K, global_num_rows, global_interlace_factor)>(cpu_ids);
     res->read(filename);
     res->check_full_plot();
     cout << "Full plot check finished in " << time(nullptr) - start_seconds << "s" << endl;
@@ -61,14 +56,12 @@ template<uint8_t K>
 void checkPlotLight(std::vector<uint32_t> cpu_ids, std::string filename)
 {
     uint64_t start_seconds = time(nullptr);
-    auto res = new Plotter<PlotConf {K, global_num_rows, global_interlace_factor}>(cpu_ids);
+    auto res = new Plotter<PlotConf(K, global_num_rows, global_interlace_factor)>(cpu_ids);
     res->read(filename);
-    res->check_parks_integrity();
-    res->check_full_table(0);
     res->find_many_proofs(100);
     cout << "Light plot check finished in " << time(nullptr) - start_seconds << "s" << endl;
 }
-
+*/
 uint8_t hex_lookup[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 void print_data_as_hex(uint8_t * data, uint32_t data_len)
 {
@@ -204,11 +197,11 @@ int main(int argc, char *argv[]) {
     }
 
     string final_filename = filesystem::path(finaldir) / filesystem::path(filename);
-
+/*
     if ((operation == "check") || (operation == "check_full")) {
         k = getK(final_filename);
     }
-
+*/
     cout << "WhisperPlot!" << endl;
     cout << " operation = " << operation << endl;
     cout << " k = " << static_cast<int>(k) << endl;
@@ -237,21 +230,22 @@ int main(int argc, char *argv[]) {
         switch (k)
         {
             case 18:
-                createPlot<18>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                createPlot<18>(id_bytes, memo_bytes, cpu_ids, final_filename);
                 break;
             case 22:
-                createPlot<22>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                createPlot<22>(id_bytes, memo_bytes, cpu_ids, final_filename);
                 break;
             case 26:
-                createPlot<26>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                createPlot<26>(id_bytes, memo_bytes, cpu_ids, final_filename);
                 break;
             case 32:
-                createPlot<32>(id_bytes.data(), memo_bytes.data(), memo_bytes.size(), cpu_ids, final_filename);
+                createPlot<32>(id_bytes, memo_bytes, cpu_ids, final_filename);
                 break;
             default:
                 cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
         }
     }
+    /*
     else if (operation == "check")
     {
         k = getK(final_filename);
@@ -294,7 +288,7 @@ int main(int argc, char *argv[]) {
                 cout << "Unsupported k selected, please choose from 18, 22, 26, or 32." << endl;
         }
     }
-
+*/
 
 
 

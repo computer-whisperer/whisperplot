@@ -56,7 +56,7 @@ void Plotter<conf>::phase2ThreadB(
 )
 {
     uint64_t new_pos = 0;
-    for (uint64_t i = 0; i < max_entries_per_graph_table; i++)
+    for (uint64_t i = 0; i < fwd_max_entries_per_graph_table; i++)
     {
         final_positions->set(i, PackedEntry<1, 1ULL << (conf.K+1), 1>(new_pos));
         new_pos += entries_used[i];
@@ -70,8 +70,8 @@ void Plotter<conf>::phase2DoTable()
 {
     StatusUpdate::StartSeg("1." + to_string((uint32_t)table_index) + ".0S");
 
-    entries_used[table_index-1] = (uint8_t*)malloc(max_entries_per_graph_table);
-    memset(entries_used[table_index-1], 0, max_entries_per_graph_table);
+    entries_used[table_index-1] = (uint8_t*)malloc(fwd_max_entries_per_graph_table);
+    memset(entries_used[table_index-1], 0, fwd_max_entries_per_graph_table);
 
     uint64_t start_seconds = time(nullptr);
 

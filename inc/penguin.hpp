@@ -36,7 +36,7 @@ public:
     {
         for (uint32_t i = 0; i < store_row_count; i++) {
             int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE;
-        if (use_hugepages)
+            if (use_hugepages)
                 flags |= MAP_HUGETLB;
             uint8_t *test = (uint8_t *) mmap(nullptr, row_size_bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
             rows[i] = (Row *) test;
@@ -87,11 +87,15 @@ public:
 
     inline uint64_t addEntry(entry_type entry)
     {
-        assert(entry.row < sort_row_count);
-        uint64_t idx = entry_counts[entry.row]++;
-        uint64_t store_row_id = entry.row / interlace_factor;
-        uint32_t interlace = entry.row % interlace_factor;
-        assert(idx < entry_type::max_entries_per_row);
+        uint64_t sort_row_id = entry.getRow();
+        assert(sort_row_id < sort_row_count);
+        uint64_t idx = entry_counts[sort_row_id]++;
+        uint64_t store_row_id = sort_row_id / interlace_factor;
+        uint32_t interlace = sort_row_id % interlace_factor;
+        if (idx >= entry_type::max_entries_per_row)
+        {
+            throw std::runtime_error("Too many entries for row.");
+        }
         rows[store_row_id]->set(interlace + idx*interlace_factor, entry);
         return idx;
     }
@@ -108,7 +112,7 @@ public:
         uint64_t store_row_id = sort_row_id / interlace_factor;
         uint32_t interlace = sort_row_id % interlace_factor;
         entry_type entry = rows[store_row_id]->get(interlace + entry_id*interlace_factor);
-        entry.row = sort_row_id;
+        entry.setRow(sort_row_id);
         return entry;
     }
     inline void popRow(uint64_t row_id)
@@ -137,10 +141,11 @@ public:
             }
         }
     }
+    /*
     inline uint64_t getUniqueIdentifier(uint64_t sort_row_id, uint32_t entry_id)
     {
         return sort_row_id + entry_id * entry_type::num_rows_v;
-    }
+    }*/
 
 };
 
