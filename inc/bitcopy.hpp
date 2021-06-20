@@ -44,7 +44,7 @@ constexpr void bitCopy(uint8_t* dest, uint8_t* src)
         }
     } else
     {
-        dest[0] |= (src[0] << src_start_bit) >> dest_start_bit;
+        dest[0] |= ((src[0] << src_start_bit)&0xFF) >> dest_start_bit;
 
         const int8_t delta = static_cast<int8_t>(dest_start_bit) - static_cast<int8_t>(src_start_bit);
         if constexpr (dest_num_bytes > 1)
@@ -63,7 +63,7 @@ constexpr void bitCopy(uint8_t* dest, uint8_t* src)
         }
 
         if constexpr ((src_num_bytes > 1)&&(dest_num_bytes > 1)) {
-            dest[1] |= ((src[1] >> (8-src_start_bit)) << (8-dest_start_bit));
+            dest[1] |= (((src[1] >> (8-src_start_bit))&0xFF) << (8-dest_start_bit));
         }
 
         return bitCopy<dest_start_bit, dest_num_bytes-1, src_start_bit, src_num_bytes-1>(dest+1, src+1);

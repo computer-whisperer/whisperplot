@@ -82,7 +82,7 @@ class YCPenguinUnloader
 
 public:
     static constexpr uint32_t bc_bucket_num = (1ULL << (conf.K + kExtraBits)) / kBC;
-    static constexpr uint32_t temp_buckets_needed = (conf.GetMaxY(table_index)/conf.num_rows) / kBC + 5;
+    static constexpr uint32_t temp_buckets_needed = (conf.GetMaxY(table_index)/conf.num_rows) / kBC + 12;
 
     explicit YCPenguinUnloader(const vector<Penguin<entry_type, conf.interlace_factor>*> penguins_in)
     : penguins(penguins_in)
@@ -268,13 +268,11 @@ public:
             in_bucket_type bigger_gid_entry,
             in_bucket_type smaller_gid_entry,
             uint8_t match_id
-    )
-    {
+    ) {
         auto left_entry = bigger_gid_entry;
         auto right_entry = smaller_gid_entry;
         // Flip based on y
-        if (left_entry.getY() > right_entry.getY())
-        {
+        if (left_entry.getY() > right_entry.getY()) {
             swap(left_entry, right_entry);
         }
 
@@ -285,7 +283,7 @@ public:
         output_gid_penguin->addEntry(new_gid_entry);
 
         // Now setup bucket entry for next iteration
-        const int64_t c_len_in = conf.GetCLen(table_index-1);
+        const int64_t c_len_in = conf.GetCLen(table_index - 1);
         const int64_t c_len_out = conf.GetCLen(table_index);
 
         uint8_t input_data[64];
@@ -293,23 +291,24 @@ public:
         memset(input_data, 0, 64);
 
         // Copy in R
-        bitCopy<64*8 - c_len_in, 64, in_bucket_type::c_len_bytes*8 - c_len_in, in_bucket_type::c_len_bytes>(input_data, right_entry.c);
+        bitCopy<conf.K + kExtraBits + c_len_in, 64,
+                in_bucket_type::c_len_bytes * 8 - c_len_in, in_bucket_type::c_len_bytes>(input_data, right_entry.c);
 
         // Copy in L
-        bitCopy<64*8 - c_len_in*2, 64, in_bucket_type::c_len_bytes*8 - c_len_in, in_bucket_type::c_len_bytes>(input_data, left_entry.c);
+        bitCopy<conf.K + kExtraBits, 64, in_bucket_type::c_len_bytes * 8 - c_len_in, in_bucket_type::c_len_bytes>(
+                input_data, left_entry.c);
 
         // Copy in F1
         {
             uint64_t f = bswap_64(left_entry.getY());
-            bitCopy<64 * 8 - c_len_in * 2 - (conf.K + kExtraBits), 64,
+            bitCopy<0, 64,
                     8 * 8 - (conf.K + kExtraBits), 8>(input_data, (uint8_t *) &f);
         }
 
         blake3_hasher hasher;
         blake3_hasher_init(&hasher);
         blake3_hasher_update(&hasher,
-                             input_data+(64*8 - c_len_in*2 - (conf.K + kExtraBits))/8,
-                             64-(64*8 - c_len_in*2 - (conf.K + kExtraBits))/8);
+                             input_data, (conf.K + kExtraBits + c_len_in * 2 + 7) / 8);
 
         uint8_t hash_bytes[32];
         blake3_hasher_finalize(&hasher, hash_bytes, sizeof(hash_bytes));
@@ -317,30 +316,72 @@ public:
         FwdYCEntry<conf, table_index> new_entry;
         new_entry.gid = new_gid_entry.getY();
 
-        if constexpr (table_index < 5)
-        {
-            new_entry.setY(bswap_64(*(uint64_t*)hash_bytes) >> (64 - (conf.K + kExtraBits)));
-        }
-        else
-        {
-            new_entry.setY(bswap_64(*(uint64_t*)hash_bytes) >> (64 - (conf.K)));
+        if constexpr (table_index < 5) {
+            new_entry.setY(bswap_64(*(uint64_t *) hash_bytes) >> (64 - (conf.K + kExtraBits)));
+        } else {
+            new_entry.setY(bswap_64(*(uint64_t *) hash_bytes) >> (64 - (conf.K)));
         }
 
         memset(new_entry.c, 0, new_entry.c_len_bytes);
         if constexpr (table_index < 2) {
             // Copy in R
-            bitCopy<out_bucket_type::c_len_bytes*8 - c_len_in, out_bucket_type::c_len_bytes,
-                in_bucket_type::c_len_bytes*8 - c_len_in, in_bucket_type::c_len_bytes>(new_entry.c, right_entry.c);
+            bitCopy<out_bucket_type::c_len_bytes * 8 - c_len_in, out_bucket_type::c_len_bytes,
+                    in_bucket_type::c_len_bytes * 8 - c_len_in, in_bucket_type::c_len_bytes>(new_entry.c,
+                                                                                             right_entry.c);
 
             // Copy in L
-            bitCopy<out_bucket_type::c_len_bytes*8 - c_len_in*2, out_bucket_type::c_len_bytes,
-                    in_bucket_type::c_len_bytes*8 - c_len_in, in_bucket_type::c_len_bytes>(new_entry.c, left_entry.c);
+            bitCopy<out_bucket_type::c_len_bytes * 8 - c_len_in * 2, out_bucket_type::c_len_bytes,
+                    in_bucket_type::c_len_bytes * 8 - c_len_in, in_bucket_type::c_len_bytes>(new_entry.c, left_entry.c);
         } else if constexpr (table_index < 5) {
             // Copy from hash result
-            bitCopy<out_bucket_type::c_len_bytes*8 - c_len_out, out_bucket_type::c_len_bytes,
+            bitCopy<out_bucket_type::c_len_bytes * 8 - c_len_out, out_bucket_type::c_len_bytes,
                     conf.K + kExtraBits, 32>(new_entry.c, hash_bytes);
+            assert(*new_entry.c < (1ULL << (c_len_out - (out_bucket_type::c_len_bytes - 1) * 8)));
         }
-        output_bucket_penguin->addEntry(new_entry);
+        uint64_t entry_i = output_bucket_penguin->addEntry(new_entry);
+
+        if (new_entry.gid == 82421925)
+        {
+            cout << "Found" << endl;
+        }
+
+        FwdYCEntry<conf, table_index> test_entry = output_bucket_penguin->readEntry(new_entry.getRow(), entry_i);
+        assert(new_entry.getY() == test_entry.getY());
+        assert(new_entry.gid == test_entry.gid);
+        assert(memcmp(new_entry.c, test_entry.c, test_entry.c_len_bytes) == 0);
+
+        // Compare with stock calculation system
+        uint64_t c_len = kVectorLens[table_index + 2] * conf.K;
+        uint128_t cl = 0;
+        memcpy(&cl, left_entry.c, left_entry.c_len_bytes);
+        cl = bswap_128(cl) >> (128 - left_entry.c_len_bytes*8);
+        uint128_t cr = 0;
+        memcpy(&cr, right_entry.c, left_entry.c_len_bytes);
+        cr = bswap_128(cr) >> (128 - left_entry.c_len_bytes*8);
+        auto out = fx->CalculateBucket(
+                Bits(left_entry.getY(), conf.K+kExtraBits),
+                Bits(cl, c_len),
+                Bits(cr, c_len));
+        uint128_t stock_y = 0;
+        uint128_t stock_c = 0;
+        if (table_index < 5) {
+            stock_y = out.first.Slice(0, conf.K+kExtraBits).GetValue();
+            uint8_t buff[32];
+            memset(buff, 0, sizeof(buff));
+            out.second.ToBytes(buff);
+            stock_c = Util::SliceInt128FromBytes(
+                    buff, 0, kVectorLens[table_index + 3] * conf.K);
+        }
+        else
+        {
+            stock_y = out.first.Slice(0, conf.K).GetValue();
+        }
+        uint128_t c_other = 0;
+        memcpy(&c_other, test_entry.c, test_entry.c_len_bytes);
+        c_other = bswap_128(c_other) >> (128 - test_entry.c_len_bytes*8);
+        assert(test_entry.getY() == stock_y);
+        assert(c_other == stock_c);
+
     }
 
     uint64_t flushQueueForEntries(vector<in_bucket_type> entries)
