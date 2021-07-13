@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstring>
 #include <ctime>
+#include <condition_variable>
 
 #include "penguin.hpp"
 #include "buffer.hpp"
@@ -11,15 +12,15 @@
 #include "pos_constants.hpp"
 #include "thread_mgr.hpp"
 #include "bitcopy.hpp"
-
 #include "status_update.hpp"
+#include "penguin_unloaders.hpp"
 
 using namespace std;
 
 template<PlotConf conf>
-Penguin<FwdYCEntry<conf, -1>, conf.interlace_factor>* Plotter<conf>::Context::createFirstTable()
+Penguin<FwdYCEntry<conf, -1>, true>* Plotter<conf>::Context::createFirstTable()
 {
-    auto output_penguin = new Penguin<FwdYCEntry<conf, -1>, conf.interlace_factor>();
+    auto output_penguin = new Penguin<FwdYCEntry<conf, -1>, true>();
 
     vector<thread> threads;
 
@@ -45,12 +46,10 @@ Penguin<FwdYCEntry<conf, -1>, conf.interlace_factor>* Plotter<conf>::Context::cr
 
               for (uint64_t i = 0; i < batch_size; i++)
               {
-                  FwdYCEntry<conf, -1> entry;
-                  entry.setY(buff[i]);
-                  uint32_t c = bswap_32(x+i);
-                  memcpy(entry.c, &c, 4);
-                  entry.gid = x+i;
-                  output_penguin->addEntry(entry);
+                  auto entry = output_penguin->newEntry(buff[i]);
+                  uint64_t c = bswap_64(x+i);
+                  memcpy((void*)entry.data->c, ((uint8_t*)&c) + 8 - entry.c_len_bytes, entry.c_len_bytes);
+                  entry.data->gid = x+i;
               }
             }}));
     }
@@ -61,124 +60,7 @@ Penguin<FwdYCEntry<conf, -1>, conf.interlace_factor>* Plotter<conf>::Context::cr
 
     return output_penguin;
 }
-
-template<PlotConf conf, uint8_t table_index>
-class YCPenguinUnloader
-{
-    using entry_type = FwdYCEntry<conf, table_index-1>;
-
-    // These are BC buckets from the chia algo
-
-
-    static constexpr uint32_t max_entries_per_bc_bucket = 350;
-
-    vector<vector<entry_type>> temp_buckets;
-
-    int64_t latest_bucket_started_load = -1;
-    int64_t latest_bucket_finished_load = -1;
-    int64_t latest_row_loaded = -1;
-
-    const vector<Penguin<entry_type, conf.interlace_factor>*> penguins;
-
-public:
-    static constexpr uint32_t bc_bucket_num = (1ULL << (conf.K + kExtraBits)) / kBC;
-    static constexpr uint32_t temp_buckets_needed = (conf.GetMaxY(table_index)/conf.num_rows) / kBC + 12;
-
-    explicit YCPenguinUnloader(const vector<Penguin<entry_type, conf.interlace_factor>*> penguins_in)
-    : penguins(penguins_in)
-    {
-        temp_buckets.resize(temp_buckets_needed);
-        for (auto &i : temp_buckets)
-        {
-            i.reserve(max_entries_per_bc_bucket);
-        }
-    }
-
-    void loadRow(uint32_t row_id)
-    {
-
-        uint64_t first_value_contained = entry_type::getFirstYInRow(row_id);
-        uint64_t first_bucket_needed = first_value_contained/kBC;
-
-        uint64_t last_value_contained = entry_type::getFirstYInRow(row_id+1) - 1;
-        uint64_t last_bucket_needed = last_value_contained/kBC;
-
-        uint64_t clear_start = latest_bucket_started_load+1;
-        if (clear_start < first_bucket_needed)
-        {
-            clear_start = first_bucket_needed;
-        }
-
-        // Clear temp buckets we will need
-        for (uint32_t i = clear_start; i <= last_bucket_needed; i++)
-        {
-            temp_buckets[i%temp_buckets_needed].clear();
-        }
-        latest_bucket_started_load = last_bucket_needed;
-
-        // Load in the row
-        for (auto& penguin : penguins)
-        {
-            for (uint32_t entry_id = 0; entry_id < penguin->getCountInRow(row_id); entry_id++)
-            {
-                auto entry = penguin->readEntry(row_id, entry_id);
-                uint32_t bucket_of_entry = entry.getY()/kBC;
-                temp_buckets[bucket_of_entry%temp_buckets_needed].push_back(entry);
-            }
-        }
-
-        latest_bucket_finished_load = (last_value_contained+1)/kBC - 1;
-        latest_row_loaded = row_id;
-
-        if (conf.GetMaxY(table_index-1) <= last_value_contained)
-        {
-            latest_bucket_finished_load = bc_bucket_num;
-        }
-
-        // If this row only contains entries relevant to this batch of buckets, pop it
-        /*
-        if ((first_bucket_needed > first_bucket_id_in_batch) &&
-            (last_bucket_needed < (first_bucket_id_in_batch + batchSize)))
-        {
-            for (auto& [numa_node, penguin] : *prev_penguins) {
-                penguin->popRow(row_id);
-            }
-        }
-         */
-
-        // TODO: pop the borderline entries somehow
-    }
-
-    vector<entry_type>& getBucketEntries(uint32_t bucket_id)
-    {
-        while (latest_bucket_finished_load < (int32_t)(bucket_id))
-        {
-            // Load next row
-            uint32_t row_id = latest_row_loaded + 1;
-
-            if (row_id >= conf.num_rows)
-            {
-                latest_bucket_finished_load = bucket_id+1;
-                break;
-            }
-
-            uint64_t first_value_needed = bucket_id*kBC;
-            uint32_t first_row_needed = FwdYCEntry<conf, table_index - 1>::getRowFromY(first_value_needed);
-            if (row_id < first_row_needed)
-            {
-                row_id = first_row_needed;
-            }
-
-            loadRow(row_id);
-        }
-        for (auto &it : temp_buckets[bucket_id%temp_buckets_needed])
-        {
-            assert(it.getY()/kBC == bucket_id);
-        }
-        return temp_buckets[bucket_id%temp_buckets_needed];
-    }
-};
-
+/*
 template<PlotConf conf, const uint8_t table_index>
 class MatchQueue {
     using in_bucket_type = FwdYCEntry<conf, table_index - 1>;
@@ -283,8 +165,8 @@ public:
         output_gid_penguin->addEntry(new_gid_entry);
 
         // Now setup bucket entry for next iteration
-        const int64_t c_len_in = conf.GetCLen(table_index - 1);
-        const int64_t c_len_out = conf.GetCLen(table_index);
+        const int64_t c_len_in = conf.getCLen(table_index - 1);
+        const int64_t c_len_out = conf.getCLen(table_index);
 
         uint8_t input_data[64];
         // Zero out so we can or in easily
@@ -314,7 +196,6 @@ public:
         blake3_hasher_finalize(&hasher, hash_bytes, sizeof(hash_bytes));
 
         FwdYCEntry<conf, table_index> new_entry;
-        new_entry.gid = new_gid_entry.getY();
 
         if constexpr (table_index < 5) {
             new_entry.setY(bswap_64(*(uint64_t *) hash_bytes) >> (64 - (conf.K + kExtraBits)));
@@ -338,50 +219,9 @@ public:
                     conf.K + kExtraBits, 32>(new_entry.c, hash_bytes);
             assert(*new_entry.c < (1ULL << (c_len_out - (out_bucket_type::c_len_bytes - 1) * 8)));
         }
-        uint64_t entry_i = output_bucket_penguin->addEntry(new_entry);
 
-        if (new_entry.gid == 82421925)
-        {
-            cout << "Found" << endl;
-        }
-
-        FwdYCEntry<conf, table_index> test_entry = output_bucket_penguin->readEntry(new_entry.getRow(), entry_i);
-        assert(new_entry.getY() == test_entry.getY());
-        assert(new_entry.gid == test_entry.gid);
-        assert(memcmp(new_entry.c, test_entry.c, test_entry.c_len_bytes) == 0);
-
-        // Compare with stock calculation system
-        uint64_t c_len = kVectorLens[table_index + 2] * conf.K;
-        uint128_t cl = 0;
-        memcpy(&cl, left_entry.c, left_entry.c_len_bytes);
-        cl = bswap_128(cl) >> (128 - left_entry.c_len_bytes*8);
-        uint128_t cr = 0;
-        memcpy(&cr, right_entry.c, left_entry.c_len_bytes);
-        cr = bswap_128(cr) >> (128 - left_entry.c_len_bytes*8);
-        auto out = fx->CalculateBucket(
-                Bits(left_entry.getY(), conf.K+kExtraBits),
-                Bits(cl, c_len),
-                Bits(cr, c_len));
-        uint128_t stock_y = 0;
-        uint128_t stock_c = 0;
-        if (table_index < 5) {
-            stock_y = out.first.Slice(0, conf.K+kExtraBits).GetValue();
-            uint8_t buff[32];
-            memset(buff, 0, sizeof(buff));
-            out.second.ToBytes(buff);
-            stock_c = Util::SliceInt128FromBytes(
-                    buff, 0, kVectorLens[table_index + 3] * conf.K);
-        }
-        else
-        {
-            stock_y = out.first.Slice(0, conf.K).GetValue();
-        }
-        uint128_t c_other = 0;
-        memcpy(&c_other, test_entry.c, test_entry.c_len_bytes);
-        c_other = bswap_128(c_other) >> (128 - test_entry.c_len_bytes*8);
-        assert(test_entry.getY() == stock_y);
-        assert(c_other == stock_c);
-
+        new_entry.gid = new_gid_entry.getY();
+        output_bucket_penguin->addEntry(new_entry);
     }
 
     uint64_t flushQueueForEntries(vector<in_bucket_type> entries)
@@ -414,7 +254,7 @@ public:
     }
 };
 
-
+*/
 
 void assert_matching(uint64_t lout, uint64_t rout)
 {
@@ -436,104 +276,344 @@ void assert_matching(uint64_t lout, uint64_t rout)
 
 }
 
+unsigned int countSetBits(int n)
+{
+    unsigned int count = 0;
+    while (n) {
+        n &= (n - 1);
+        count++;
+    }
+    return count;
+}
+
+template <PlotConf conf, uint8_t table_index>
+class EntryMatcher
+{
+public:
+
+    static constexpr  uint32_t num_entries_per_buffer = 17;
+    static constexpr uint32_t num_buckets_per_row = FwdYCEntry<conf, table_index-1>::num_bc_buckets_per_row;
+
+    struct entryWithC
+    {
+        uint64_t bucket_id : ceillog2(num_buckets_per_row);
+        uint128_t gid : FwdYCEntry<conf, table_index-1>::gid_len_bits;
+        uint8_t c[FwdYCEntry<conf, table_index-1>::c_len_bytes];
+    };
+
+    struct entryWithoutC
+    {
+        uint64_t bucket_id : ceillog2(num_buckets_per_row);
+        uint128_t gid : FwdYCEntry<conf, table_index-1>::gid_len_bits;
+    };
+
+    using entry_struct = typename std::conditional<(FwdYCEntry<conf, table_index-1>::c_len_bytes > 0), entryWithC, entryWithoutC>::type;
+
+    array<array<entry_struct, num_entries_per_buffer>, kBC> match_staging;
+    array<bitset<num_entries_per_buffer>, kBC> match_staging_used_map;
+
+    void loadRow(vector<Penguin<FwdYCEntry<conf, table_index-1>, true>*> penguins, uint64_t row_id)
+    {
+        for (auto & it : match_staging_used_map)
+        {
+            it = 0;
+        }
+        for (auto & penguin : penguins)
+        {
+            const uint64_t num_entries = penguin->getCountInRow(row_id);
+            for (uint64_t entry_id = 0; entry_id < num_entries; entry_id++)
+            {
+                auto entry = penguin->readEntry(row_id, entry_id);
+                entry_struct tmp_entry;
+                tmp_entry.bucket_id = entry.data->packed_y / kBC;
+                tmp_entry.gid = entry.data->gid;
+                if constexpr(FwdYCEntry<conf, table_index - 1>::c_len_bytes > 0) {
+                    memcpy(tmp_entry.c, entry.data->c, FwdYCEntry<conf, table_index - 1>::c_len_bytes);
+                }
+                uint32_t bc = entry.data->packed_y % kBC;
+                // Find destination
+                uint32_t pos = (tmp_entry.bucket_id * num_entries_per_buffer) /
+                               FwdYCEntry<conf, table_index - 1>::num_bc_buckets_per_row;
+                uint8_t attempt_ct = 0;
+                while (match_staging_used_map[bc][pos]) {
+                    // Store lesser of the two values
+                    if (tmp_entry.bucket_id < match_staging[bc][pos].bucket_id) {
+                        swap(tmp_entry, match_staging[bc][pos]);
+                    }
+                    pos = (pos + 1) % num_entries_per_buffer;
+                    attempt_ct++;
+                    if (attempt_ct == num_entries_per_buffer) {
+                        throw runtime_error("Filled up a match staging area!");
+                    }
+                }
+                // Store new value
+                match_staging[bc][pos].bucket_id = tmp_entry.bucket_id;
+                match_staging[bc][pos].gid = tmp_entry.gid;
+                if constexpr(FwdYCEntry<conf, table_index - 1>::c_len_bytes > 0) {
+                    memcpy(match_staging[bc][pos].c, tmp_entry.c,
+                           FwdYCEntry<conf, table_index - 1>::c_len_bytes);
+                }
+                // Mark used
+                match_staging_used_map[bc][pos] = true;
+            }
+        }
+    }
+};
+
 template <PlotConf conf>
 template <uint8_t table_index>
-Penguin<FwdYCEntry<conf, table_index>, conf.interlace_factor>*  Plotter<conf>::Context::createTable(
-        vector<Penguin<FwdYCEntry<conf, table_index-1>, conf.interlace_factor>*> prev_penguins,
-        atomic<uint64_t>& num_matches_out)
-{
-    auto output_bucket_penguin = new Penguin<FwdYCEntry<conf, table_index>, conf.interlace_factor>();
-    auto output_gid_penguin = new Penguin<FwdGIDEntry<conf, table_index>, conf.interlace_factor>();
-    this->forward_pass_gid_penguins[table_index] = (void*)output_gid_penguin;
+Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTable(
+        vector<Penguin<FwdYCEntry<conf, table_index-1>, true>*> prev_penguins,
+        atomic<uint64_t>& num_matches_out) {
+    PinToCpuid(cpu_ids[0]);
+    auto output_bucket_penguin = new Penguin<FwdYCEntry<conf, table_index>, true>();
+    auto output_gid_penguin = new Penguin<FwdGIDEntry<conf, table_index>, true>();
+    this->forward_pass_gid_penguins[table_index] = (void *) output_gid_penguin;
+
+    vector<EntryMatcher<conf, table_index>> entry_matchers(3);
+    atomic<int64_t> latest_active_matcher_buffer = -1;
+    atomic<uint64_t> context_coordinator = 0;
+    uint64_t last_matcher_buffer = (1ULL << 63);
 
     vector<thread> threads;
 
-    for (auto & cpu_id : cpu_ids)
-    {
-        threads.push_back(thread( [this, cpu_id, &output_bucket_penguin, &output_gid_penguin, &prev_penguins, &num_matches_out] {
+    for (auto &cpu_id : cpu_ids) {
+        threads.push_back(thread([this,
+                                         cpu_id,
+                                         &entry_matchers,
+                                         &last_matcher_buffer,
+                                         &latest_active_matcher_buffer,
+                                         &context_coordinator,
+                                         &output_bucket_penguin,
+                                         &output_gid_penguin,
+                                         &num_matches_out] {
 
             PinToCpuid(cpu_id);
             uint64_t num_matches_in_thread = 0;
-            vector<vector<uint32_t>> right_map(kBC);
-            for (auto &i : right_map) {
-                i.clear();
-            }
-            std::vector<uint32_t> right_map_clean;
 
-            YCPenguinUnloader<conf, table_index> penguin_unloader(prev_penguins);
-            MatchQueue<conf, table_index> match_queue(
-                    output_bucket_penguin,
-                    output_gid_penguin
-                    );
-
-            constexpr uint32_t batchSize = YCPenguinUnloader<conf, table_index>::temp_buckets_needed * 32;
-            uint64_t bucket_id = 0;
-            while (bucket_id < YCPenguinUnloader<conf, table_index>::bc_bucket_num)
-            {
-
-                uint64_t first_bucket_id_in_batch = this->plotter->coordinator.fetch_add(batchSize);
-                uint64_t last_bucket_id_in_batch = bucket_id+batchSize;
-
-                if (last_bucket_id_in_batch > YCPenguinUnloader<conf, table_index>::bc_bucket_num-1)
-                {
-                    last_bucket_id_in_batch = YCPenguinUnloader<conf, table_index>::bc_bucket_num-1;
+            struct MatchData {
+                uint32_t bc;
+                typename EntryMatcher<conf, table_index>::entry_struct *entry;
+            };
+            struct {
+                bool operator()(const MatchData lhs, const MatchData &rhs) const {
+                    return lhs.entry->gid < rhs.entry->gid;
                 }
+            } matchCompare;
+            vector<MatchData> matches;
+            matches.reserve(conf.max_gid_stub_val);
 
-                bucket_id = first_bucket_id_in_batch;
+            while (true) {
+                uint32_t batch_num = this->plotter->coordinator++;
+                uint16_t b_id = batch_num % kB;
+                uint32_t matcher_buffer_needed = batch_num / kB;
 
-                match_queue.setBounds(first_bucket_id_in_batch, last_bucket_id_in_batch);
-
-                if (bucket_id > 0)
+                // Wait for the necessary buffer to be available
                 {
-                    // Start loading from one bucket back
-                    bucket_id--;
-                }
-                while (bucket_id < last_bucket_id_in_batch)
-                {
-                    auto left_bucket_entries = penguin_unloader.getBucketEntries(bucket_id);
-                    auto right_bucket_entries = penguin_unloader.getBucketEntries(bucket_id + 1);
-
-                    // Process bucket_id and bucket_id + 1
-                    uint16_t parity = bucket_id % 2;
-                    for (size_t yl : right_map_clean) {
-                        right_map[yl].clear();
+                    uint32_t matcher_buffer_avail = latest_active_matcher_buffer.load();
+                    if (matcher_buffer_avail < matcher_buffer_needed) {
+                        latest_active_matcher_buffer.wait(matcher_buffer_avail);
                     }
-                    right_map_clean.clear();
-                    for (size_t pos_R = 0; pos_R < right_bucket_entries.size(); pos_R++) {
-                        auto right_entry = right_bucket_entries[pos_R];
-                        uint64_t r_y = right_entry.getY() % kBC;
-                        if (right_map[r_y].empty())
-                        {
-                            right_map_clean.push_back(r_y);
+                    if (last_matcher_buffer < matcher_buffer_needed)
+                    {
+                        break;
+                    }
+                    // TODO: handle finish
+                }
+                EntryMatcher<conf, table_index> *matcher = &entry_matchers[matcher_buffer_needed %
+                                                                          entry_matchers.size()];
+
+                // Staging area is filled, now search for matches
+                for (uint16_t c_id = 0; c_id < kC; c_id++) {
+                    uint16_t bc = b_id * kC + c_id;
+
+                    // bc targets for right and left match candidates
+                    uint16_t right_targets[2][64];
+                    uint16_t left_targets[2][64];
+                    for (uint8_t parity = 0; parity < 2; parity++) {
+                        for (uint16_t m = 0; m < kExtraBitsPow; m++) {
+                            right_targets[parity][m] =
+                                    ((b_id + m) % kB) * kC + ((bc + (2 * m + parity) * (2 * m + parity)) % kC);
+                            left_targets[parity][m] =
+                                    ((b_id - m) % kB) * kC + ((bc - (2 * m + parity) * (2 * m + parity)) % kC);
                         }
-                        right_map[r_y].push_back(pos_R);
                     }
 
-                    for (size_t pos_L = 0; pos_L < left_bucket_entries.size(); pos_L++) {
-                        auto left_entry = left_bucket_entries[pos_L];
-                        for (uint8_t i = 0; i < kExtraBitsPow; i++) {
-                            uint16_t r_target = L_targets[parity][left_entry.getY()%kBC][i];
-                            for (auto& pos_R : right_map[r_target]) {
-                                match_queue.addMatch(left_entry, right_bucket_entries[pos_R]);
-                                assert_matching(left_entry.getY(), right_bucket_entries[pos_R].getY());
+                    const uint32_t num_entries_per_buffer = EntryMatcher<conf, table_index>::num_entries_per_buffer;
+
+                    for (uint8_t cpos = 0; cpos < num_entries_per_buffer; cpos++) {
+                        if (!matcher->match_staging_used_map[bc][cpos]) {
+                            continue;
+                        }
+                        // Scan for left and right matches of this value, only using those with lower GID then we have
+                        const uint32_t our_bucket = matcher->match_staging[bc][cpos].bucket_id;
+                        const bool parity = our_bucket % 2;
+                        const uint128_t our_gid = matcher->match_staging[bc][cpos].gid;
+                        matches.clear();
+                        {
+                            // looking for entries right of us
+                            uint32_t r_bucket = our_bucket + 1;
+                            uint32_t start_pos = (r_bucket * num_entries_per_buffer) /
+                                                 FwdYCEntry<conf, table_index - 1>::num_bc_buckets_per_row;
+                            for (auto &r_bc : right_targets[parity]) {
+                                uint32_t pos = start_pos;
+                                uint8_t attempt_ct = 0;
+                                while (matcher->match_staging_used_map[r_bc][pos]) {
+                                    if (matcher->match_staging[r_bc][pos].bucket_id == r_bucket) {
+                                        if (matcher->match_staging[r_bc][pos].gid < our_gid) {
+                                            MatchData match;
+                                            match.entry = &(matcher->match_staging[r_bc][pos]);
+                                            match.bc = r_bc;
+                                            matches.push_back(match);
+                                        }
+                                    }
+                                    pos++;
+                                    attempt_ct++;
+                                    if (attempt_ct == num_entries_per_buffer) {
+                                        break;
+                                    }
+                                }
                             }
                         }
-                    }
+                        {
+                            // looking for entries left of us
+                            uint32_t l_bucket = our_bucket - 1;
+                            uint32_t start_pos = (l_bucket * num_entries_per_buffer) /
+                                                 FwdYCEntry<conf, table_index - 1>::num_bc_buckets_per_row;
+                            for (auto &l_bc : left_targets[parity]) {
+                                uint32_t pos = start_pos;
+                                uint8_t attempt_ct = 0;
+                                while (matcher->match_staging_used_map[l_bc][pos]) {
+                                    if (matcher->match_staging[l_bc][pos].bucket_id == l_bucket) {
+                                        if (matcher->match_staging[l_bc][pos].gid < our_gid) {
+                                            MatchData match;
+                                            match.entry = &(matcher->match_staging[l_bc][pos]);
+                                            match.bc = l_bc;
+                                            matches.push_back(match);
+                                        }
+                                    }
+                                    pos++;
+                                    attempt_ct++;
+                                    if (attempt_ct == num_entries_per_buffer) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        num_matches_in_thread += matches.size();
+                        if (matches.size() > conf.max_gid_stub_val) {
+                            throw new runtime_error("Too many matches for selected max_gid_stub_val");
+                        }
+                        // Sort matches
+                        sort(matches.begin(), matches.end(), matchCompare);
+                        // Process matches
+                        uint128_t new_gid = our_gid * conf.max_gid_stub_val;
+                        for (auto &match : matches) {
+                            bool flip = match.entry->bucket_id > our_bucket;
+                            uint32_t left_y = flip ? bc + our_bucket * kBC : match.bc + match.entry->bucket_id * kBC;
+                            //uint32_t right_y = flip ? match.bc + match.entry->bucket_id*kBC : bc + our_bucket*kBC;
+                            uint8_t *left_c = flip ? matcher->match_staging[bc][cpos].c : match.entry->c;
+                            uint8_t *right_c = flip ? match.entry->c : matcher->match_staging[bc][cpos].c;
 
-                    num_matches_in_thread += match_queue.flushQueueForEntries(left_bucket_entries);
+                            // Setup gid entry first
+                            auto new_gid_entry = output_gid_penguin->newEntry(new_gid);
+                            new_gid_entry.data->right_gid = match.entry->gid;
 
-                    if (bucket_id == YCPenguinUnloader<conf, table_index>::bc_bucket_num-2)
-                    {
-                        // We have emptied the last bucket. This means we should also dump the right bucket from the queue
-                        num_matches_in_thread += match_queue.flushQueueForEntries(right_bucket_entries);
+                            // Now setup bucket entry for next iteration
+                            const int64_t c_len_bits_in = conf.getCLen(table_index - 1);
+                            const int64_t c_len_bits_out = conf.getCLen(table_index);
+                            const uint64_t c_len_bytes_in = FwdYCEntry<conf, table_index - 1>::c_len_bytes;
+                            const uint64_t c_len_bytes_out = FwdYCEntry<conf, table_index>::c_len_bytes;
+
+                            uint8_t input_data[64];
+                            // Zero out so we can or in easily
+                            memset(input_data, 0, 64);
+
+                            // Copy in R
+                            bitCopy<conf.K + kExtraBits + c_len_bits_in, 64,
+                                    c_len_bytes_in * 8 - c_len_bits_in, FwdYCEntry<conf, table_index - 1>::c_len_bytes>(
+                                    input_data, right_c);
+
+                            // Copy in L
+                            bitCopy<conf.K + kExtraBits, 64, c_len_bytes_in * 8 - c_len_bits_in, c_len_bytes_in>(
+                                    input_data, left_c);
+
+                            // Copy in F1
+                            {
+                                uint64_t f = bswap_64(left_y);
+                                bitCopy<0, 64,
+                                        8 * 8 - (conf.K + kExtraBits), 8>(input_data, (uint8_t *) &f);
+                            }
+
+                            blake3_hasher hasher;
+                            blake3_hasher_init(&hasher);
+                            blake3_hasher_update(&hasher,
+                                                 input_data, (conf.K + kExtraBits + c_len_bits_in * 2 + 7) / 8);
+
+                            uint8_t hash_bytes[32];
+                            blake3_hasher_finalize(&hasher, hash_bytes, sizeof(hash_bytes));
+
+                            uint64_t new_y = 0;
+                            if constexpr (table_index < 5) {
+                                new_y = bswap_64(*(uint64_t *) hash_bytes) >> (64 - (conf.K + kExtraBits));
+                            } else {
+                                new_y = bswap_64(*(uint64_t *) hash_bytes) >> (64 - (conf.K));
+                            }
+
+                            auto new_entry = output_bucket_penguin->newEntry(new_y);
+
+                            if constexpr(c_len_bytes_out > 0) {
+                                memset(new_entry.data->c, 0, c_len_bytes_out);
+                                if constexpr (table_index < 2) {
+                                    // Copy in R
+                                    bitCopy<c_len_bytes_out * 8 - c_len_bits_in, c_len_bytes_out,
+                                            c_len_bytes_in * 8 - c_len_bits_in, c_len_bytes_in>(new_entry.data->c,
+                                                                                                right_c);
+
+                                    // Copy in L
+                                    bitCopy<c_len_bytes_out * 8 - c_len_bits_in * 2, c_len_bytes_out,
+                                            c_len_bytes_in * 8 - c_len_bits_in, c_len_bytes_in>(new_entry.data->c,
+                                                                                                left_c);
+                                } else if constexpr (table_index < 5) {
+                                    // Copy from hash result
+                                    bitCopy<c_len_bytes_out * 8 - c_len_bits_out, c_len_bytes_out,
+                                            conf.K + kExtraBits, 32>(new_entry.data->c, hash_bytes);
+                                    assert(*new_entry.data->c < (1ULL << (c_len_bits_out - (c_len_bytes_out - 1) * 8)));
+                                }
+                            }
+                            new_entry.data->gid = new_gid;
+
+                            new_gid++;
+                        }
                     }
-                    bucket_id++;
                 }
             }
-
             num_matches_out += num_matches_in_thread;
         }));
     }
+
+    // Fill the entry_matchers datastructures ahead of the main matching process
+    uint32_t row_id;
+    uint32_t matcher_id = 0;
+    while ((row_id = plotter->coordinator++) < FwdYCEntry<conf, table_index-1>::num_rows)
+    {
+        entry_matchers[matcher_id%entry_matchers.size()].loadRow(prev_penguins, row_id);
+        latest_active_matcher_buffer = matcher_id;
+        latest_active_matcher_buffer.notify_all();
+
+        // Wait for local coordinator to tick over to the latest active buffer
+        uint64_t latest_coordinator_val;
+        while ((latest_coordinator_val = context_coordinator.load()) < kB*matcher_id)
+        {
+            context_coordinator.wait(latest_coordinator_val);
+        }
+
+        matcher_id++;
+    }
+    last_matcher_buffer = latest_active_matcher_buffer;
+    latest_active_matcher_buffer.notify_all();
+
+
     for (auto &it: threads)
     {
         it.join();
@@ -543,15 +623,15 @@ Penguin<FwdYCEntry<conf, table_index>, conf.interlace_factor>*  Plotter<conf>::C
 }
 
 template <PlotConf conf, uint8_t table_index>
-vector<Penguin<FwdYCEntry<conf, table_index>, conf.interlace_factor>*> DoTable(
+vector<Penguin<FwdYCEntry<conf, table_index>, true>*> DoTable(
         Plotter<conf>* plotter,
-        vector<Penguin<FwdYCEntry<conf, table_index-1>, conf.interlace_factor>*> input_yc_penguins)
+        vector<Penguin<FwdYCEntry<conf, table_index-1>, true>*> input_yc_penguins)
 {
     StatusUpdate::StartSeg("0." + to_string((uint32_t)table_index) + "0M");
     vector<thread> threads;
     plotter->coordinator = 0;
     atomic<uint64_t> num_matches = 0;
-    vector<Penguin<FwdYCEntry<conf, table_index>, conf.interlace_factor>*> output_yc_penguin(plotter->contexts.size());
+    vector<Penguin<FwdYCEntry<conf, table_index>, true>*> output_yc_penguin(plotter->contexts.size());
     for (uint32_t i = 0; i < plotter->contexts.size(); i++)
     {
         threads.push_back(thread( [plotter, i, &output_yc_penguin, &input_yc_penguins, &num_matches] {
@@ -577,11 +657,9 @@ void Plotter<conf>::create(array<uint8_t, 32> id_in)
 {
     id = id_in;
 
-    load_tables();
-
     vector<thread> threads;
     coordinator = 0;
-    vector<Penguin<FwdYCEntry<conf, -1>, conf.interlace_factor>*> first_yc_penguin(contexts.size());
+    vector<Penguin<FwdYCEntry<conf, -1>, true>*> first_yc_penguin(contexts.size());
     StatusUpdate::StartSeg("0.-1M");
     for (uint32_t i = 0; i < contexts.size(); i++)
     {
@@ -612,3 +690,6 @@ void Plotter<conf>::create(array<uint8_t, 32> id_in)
 }
 
 #include "explicit_templates.hpp"
+#include "plotconf.hpp"
+#include "penguin_entries.hpp"
+#include "penguin_unloaders.hpp"

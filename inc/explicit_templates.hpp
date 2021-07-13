@@ -5,6 +5,8 @@
 #ifndef WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 #define WHISPERPLOT_EXPLICIT_TEMPLATES_HPP
 
+#include "plotconf.hpp"
+
 constexpr uint32_t global_interlace_factor = 1ULL << 1;
 constexpr uint32_t global_num_rows = global_interlace_factor*(1ULL << 10);
 

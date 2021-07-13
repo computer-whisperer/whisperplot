@@ -24,7 +24,7 @@ int32_t Plotter<conf>::find_proofs(uint128_t challenge_in)
             auto entry = context->forward_pass_final_yc_penguin->readEntry(row_id, i);
             if (entry.getY() == challenge)
             {
-                gids.push_back(entry.gid);
+                gids.push_back(entry.data->gid);
             }
         }
     }
@@ -71,7 +71,7 @@ uint8_t Plotter<conf>::check_match_and_return_values(uint128_t gid, uint64_t& y,
     uint64_t row_id = FwdGIDEntry<conf, table_index>::getRowFromY(gid);
     for (auto & context : contexts)
     {
-        auto penguin = (Penguin<FwdGIDEntry<conf, table_index>, conf.interlace_factor>*) context->forward_pass_gid_penguins[table_index];
+        auto penguin = (Penguin<FwdGIDEntry<conf, table_index>, true>*) context->forward_pass_gid_penguins[table_index];
         for (uint64_t i = 0; i < penguin->getCountInRow(row_id); i++)
         {
             auto entry = penguin->readEntry(row_id, i);
@@ -100,28 +100,28 @@ uint8_t Plotter<conf>::check_match_and_return_values(uint128_t gid, uint64_t& y,
     {
         case 5:
             l_ret = check_match_and_return_values<4>(entry.getY()/conf.max_gid_stub_val, ref(yl), ref(cl));
-            r_ret = check_match_and_return_values<4>(entry.right_gid, ref(yr), ref(cr));
+            r_ret = check_match_and_return_values<4>(entry.data->right_gid, ref(yr), ref(cr));
             break;
         case 4:
             l_ret = check_match_and_return_values<3>(entry.getY()/conf.max_gid_stub_val, ref(yl), ref(cl));
-            r_ret = check_match_and_return_values<3>(entry.right_gid, ref(yr), ref(cr));
+            r_ret = check_match_and_return_values<3>(entry.data->right_gid, ref(yr), ref(cr));
             break;
         case 3:
             l_ret = check_match_and_return_values<2>(entry.getY()/conf.max_gid_stub_val, ref(yl), ref(cl));
-            r_ret = check_match_and_return_values<2>(entry.right_gid, ref(yr), ref(cr));
+            r_ret = check_match_and_return_values<2>(entry.data->right_gid, ref(yr), ref(cr));
             break;
         case 2:
             l_ret = check_match_and_return_values<1>(entry.getY()/conf.max_gid_stub_val, ref(yl), ref(cl));
-            r_ret = check_match_and_return_values<1>(entry.right_gid, ref(yr), ref(cr));
+            r_ret = check_match_and_return_values<1>(entry.data->right_gid, ref(yr), ref(cr));
             break;
         case 1:
             l_ret = check_match_and_return_values<0>(entry.getY()/conf.max_gid_stub_val, ref(yl), ref(cl));
-            r_ret = check_match_and_return_values<0>(entry.right_gid, ref(yr), ref(cr));
+            r_ret = check_match_and_return_values<0>(entry.data->right_gid, ref(yr), ref(cr));
             break;
         case 0:
             F1Calculator f1(conf.K, id.data());
             cl = entry.getY()/conf.max_gid_stub_val;
-            cr = entry.right_gid;
+            cr = entry.data->right_gid;
             yl = f1.CalculateF(Bits(cl, conf.K)).GetValue();
             yr = f1.CalculateF(Bits(cr, conf.K)).GetValue();
             break;
@@ -183,9 +183,9 @@ uint8_t Plotter<conf>::check_match_and_return_values(uint128_t gid, uint64_t& y,
     return 0;
 }
 
-/*
+
 template <PlotConf conf>
-void Plotter<conf>::check_full_plot()
+void Plotter<conf>::checkFullPlot()
 {
     cout << "Verifying all proofs" << endl;
     uint64_t part_start_seconds = time(nullptr);
@@ -196,11 +196,10 @@ void Plotter<conf>::check_full_plot()
     atomic<uint64_t> proofs_failed_value = 0;
 
     vector<thread> threads;
-    std::atomic<uint64_t> coordinator = 0;
-    for (auto & cpu_id : cpu_ids)
+    coordinator = 0;
+    for (uint32_t i = 0; i < num_threads; i++)
     {
         threads.push_back(thread( [this,
-                                   &coordinator,
                                   &proofs_found,
                                   &proofs_verified,
                                   &proofs_failed_matching,
@@ -209,19 +208,19 @@ void Plotter<conf>::check_full_plot()
             vector<uint128_t> line_points;
             while(true)
             {
-                uint64_t row_id = coordinator++;
+                uint64_t row_id = this->coordinator++;
 
-                if (row_id >= FwdYCEntry<conf, 5>::num_rows)
+                if (row_id >= conf.num_rows)
                   break;
 
                 for (auto & context : contexts)
                 {
-                    for (uint64_t i = 0; i < context.forward_pass_final_yc_penguin->getCountInRow(row_id); i++)
+                    for (uint64_t i = 0; i < context->forward_pass_final_yc_penguin->getCountInRow(row_id); i++)
                     {
-                        auto entry = context.forward_pass_final_yc_penguin.getEntry(row_id, i);
+                        auto entry = context->forward_pass_final_yc_penguin->readEntry(row_id, i);
                         proofs_found++;
 
-                        uint64_t gid = entry.gid;
+                        uint64_t gid = entry.data->gid;
                         uint64_t y = entry.getY();
 
                         uint64_t y_calculated;
@@ -256,7 +255,7 @@ void Plotter<conf>::check_full_plot()
     cout << "Found " << proofs_failed_value << " proofs that meet all matching conditions, but do not match provided f7" << endl;
     cout << "Verification finished in " << time(nullptr) - part_start_seconds << "s" << endl;
 }
-*/
+
 
 /*
 template <PlotConf conf>

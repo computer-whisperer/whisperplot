@@ -9,6 +9,8 @@
 #include "util.hpp"
 #include "status_update.hpp"
 #include "explicit_templates.hpp"
+#include "plotconf.hpp"
+
 using namespace bls;
 
 using namespace std;
@@ -38,7 +40,8 @@ void createPlot(std::array<uint8_t, 32> id_in, vector<uint8_t> memo_in, std::vec
     uint64_t start_seconds = time(nullptr);
     auto res = new Plotter<PlotConf(K, global_num_rows, global_interlace_factor)>(cpu_ids);
     res->create(id_in);
-    res->find_many_proofs(100);
+    //res->find_many_proofs(100);
+    //res->checkFullPlot();
     cout << "Plot create finished in " << time(nullptr) - start_seconds << "s" << endl;
 }
 /*

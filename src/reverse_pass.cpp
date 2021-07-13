@@ -10,190 +10,161 @@
 #include "plotter.hpp"
 #include "chiapos_util.hpp"
 #include "status_update.hpp"
+#include "bitcopy.hpp"
 
 using namespace std;
 
+// C3 is compressed table of Y deltas, also kicks out GID list and checkpoint list for use later.
 template <PlotConf conf>
-template <int8_t table_index>
-void Plotter<conf>::phase3ThreadA(
-        uint32_t cpu_id,
-        atomic<uint64_t>* coordinator,
-        vector<Park*>* temporary_parks,
-        uint8_t* entries_used,
-        vector<p2_final_positions_type>* final_positions,
-        Buffer* output_buffer,
-        vector<vector<Park*>>* final_parks,
-        uint64_t start_offset)
+void Plotter<conf>::Context::writeC3(
+        Penguin<RevGIDEntry<conf, 6>, conf.interlace_factor>* gid_penguin_out,
+        vector<uint64_t>* y_cpoints_out,
+        uint8_t* table_out,
+        uint64_t* num_bytes_out,
+        uint64_t* num_checkpoints_out)
 {
-    PinToCpuid(cpu_id);
-    vector<uint128_t> temporary_park_line_points(LinePointUIDPackedEntry<table_index>::max_entries_per_row);
-    vector<uint128_t> park_line_points(kEntriesPerPark);
-    vector<uint8_t> delta_buff(kEntriesPerPark);
-    vector<uint64_t> stub_buff(kEntriesPerPark);
-	while (true)
-	{
-		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(conf.K, table_index+1);
+    vector<FwdYCEntry<conf, 5>*> input_penguins;
 
-		uint32_t park_id = coordinator->fetch_add(1);
-		// Output everything for this park id
-
-		uint64_t park_starting_pos = kEntriesPerPark*park_id;
-		uint64_t temporary_park_id = 0;
-
-		uint64_t park_entry_i = 0;
-
-		while (temporary_park_id < temporary_parks->size())
-		{
-		    uint64_t old_end_pos = temporary_parks->at(temporary_park_id)->start_pos + temporary_parks->at(temporary_park_id)->size();
-		    uint64_t new_end_pos = old_end_pos;
-            if (table_index < 5)
-                new_end_pos = (*final_positions)[table_index].get(old_end_pos).getY();
-			if (new_end_pos > park_starting_pos)
-			{
-
-                temporary_parks->at(temporary_park_id)->readEntries(temporary_park_line_points);
-                for (uint64_t i = 0; i < temporary_parks->at(temporary_park_id)->size(); i++)
-				{
-				    uint64_t old_pos = temporary_parks->at(temporary_park_id)->start_pos+i;
-				    uint64_t new_pos = old_pos;
-				    if (table_index < 5)
-				        new_pos = (*final_positions)[table_index].get(old_pos).getY();
-				    if (new_pos < park_starting_pos)
-                    {
-				        continue;
-                    }
-				    if ((table_index == 5) || entries_used[old_pos])
-                    {
-
-				        uint128_t line_point = temporary_park_line_points[i];
-
-				        if (table_index > 0)
-                        {
-                            // Re-encode line point to compensate for dropped entries in previous table
-                            auto res = Encoding::LinePointToSquare(line_point);
-                            uint64_t x_new = (*final_positions)[table_index-1].get(res.first).getY();
-                            uint64_t y_new = (*final_positions)[table_index-1].get(res.second).getY();
-                            line_point = Encoding::SquareToLinePoint(x_new, y_new);
-                        }
-                        park_line_points[park_entry_i++] = line_point;
-                    }
-					if (park_entry_i == kEntriesPerPark)
-					{
-						break;
-					}
-				}
-			}
-			if (park_entry_i == kEntriesPerPark)
-			{
-				break;
-			}
-            temporary_park_id++;
-		}
-
-		if (park_entry_i == 0)
-		{
-			break;
-		}
-
-		// Kick the insertion pointer down the output buffer
-		output_buffer->GetInsertionOffset(park_size_bytes);
-
-		// Pad the end with more stuff
-		park_line_points.resize(park_entry_i);
-
-		Park* p;
-		if (table_index == 0) {
-            using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDeltaTable1*100), (uint32_t)(kRValues[table_index]*100)>;
-            cp* p2 = new cp(kEntriesPerPark);
-            assert(p2->GetSpaceNeeded() == park_size_bytes);
-            p = p2;
-            p2->useBuffers(&stub_buff, &delta_buff);
-        }
-		else {
-		    using cp = CompressedPark<conf.K * 2, conf.K, kStubMinusBits, (uint32_t)(kMaxAverageDelta*100), (uint32_t)(kRValues[table_index]*100)>;
-            cp* p2 = new cp(kEntriesPerPark);
-            assert(p2->GetSpaceNeeded() == park_size_bytes);
-            p = p2;
-            p2->useBuffers(&stub_buff, &delta_buff);
-        }
-        p->bind(output_buffer->data + start_offset + park_id * park_size_bytes);
-		p->addEntries(park_line_points);
-
-
-
-        delete p;
-	}
-}
-
-template <PlotConf conf>
-template <int8_t table_index>
-void Plotter<conf>::phase3DoTable()
-{
-    StatusUpdate::StartSeg("2." + to_string((uint32_t)table_index) + ".0S");
-
-    // Wait for the final positions table to be ready
-    final_parks.emplace_back();
-    uint8_t* current_entries_used = nullptr;
-    if (table_index < 5)
+    for (auto & context : this->plotter->contexts)
     {
-        phase2b_threads[table_index].join();
-        current_entries_used = entries_used[table_index];
+        input_penguins.push_back(context->forward_pass_final_yc_penguin);
     }
-    final_table_begin_pointers[table_index] = bswap_64(*(output_buffer->insert_pos));
 
-
-    StatusUpdate::StartSeg("2." + to_string((uint32_t)table_index) + ".1M");
+    vector<uint64_t> bytes_used_by_threads;
+    vector<uint64_t> checkpoints_used_by_threads;
 
     vector<thread> threads;
-    std::atomic<uint64_t> coordinator = 0;
-    uint64_t start_offset = *output_buffer->insert_pos;
-    for (auto & cpu_id : cpu_ids)
-    {
-        threads.push_back(thread(
-                Plotter<conf>::phase3ThreadA<table_index>,
-                cpu_id,
-                &coordinator,
-                &(phase1_graph_parks[table_index]),
-                current_entries_used,
-                phase2_final_positions,
-                output_buffer,
-                &final_parks,
-                start_offset));
-    }
 
+    for (auto &cpu_id : cpu_ids) {
+        threads.push_back(
+                bytes_used_by_thread.push_back(0);
+                uint64_t* bytes_used = bytes_used_by_thread.end()-1;
+
+                checkpoints_used_by_thread.push_back(0);
+                uint64_t* checkpoints_used = checkpoints_used_by_thread.end()-1;
+                thread([this, cpu_id, bytes_used, checkpoints_used] {
+
+                    SortedParkedPenguinUnloader<conf, FwdYCEntry<conf, 5>, kCheckpoint1Interval> unloader(input_penguins);
+                    const uint64_t park_size_bytes = (kC3BitsPerEntry * kCheckpoint1Interval + 7)/8;
+
+                    vector<uint64_t> deltas_to_write;
+                    deltas_to_write.reserve(FwdYCEntry<conf, 5>::max_entries_per_row);
+
+                    uint64_t batch_size = 1024;
+                    while (true)
+                    {
+                        uint32_t park_id = this->plotter->coordinator.fetch_add(batch_size);
+
+                        while (uint64_t i = 0; i < batch_size; i++)
+                        {
+                            auto park_entries = unloader.getBucketEntries(park_id);
+
+                            y_cpoints_out[park_id] = park_entries[0].getY();
+                            (*checkpoints_used)++;
+
+                            deltas_to_write.clear();
+                            for (uint32_t j = 1; j < park_entries.size(); j++)
+                            {
+                                deltas_to_write.push_back(park_entries[i].getY() - park_entries[i-1].getY());
+                            }
+
+                            (*y_cpoints)[park_id] = park_entries[0].getY();
+
+                            uint8_t* dest = table_out + park_size_bytes*park_id;
+
+                            size_t num_bytes =
+                                    Encoding::ANSEncodeDeltas(deltas_to_write, deltas_to_write.size(), kC3R, dest + 2) + 2;
+                            *((uint16_t*)dest) = bswap_16(num_bytes);
+
+                            for (auto & entry : park_entries)
+                            {
+                                RevGIDEntry<conf, 5> new_entry;
+                                new_entry.row = park_id;
+                                new_entry.gid = entry.gid;
+                                gid_penguin_out.add_entry(new_entry);
+                            }
+
+                            park_id++;
+
+                            bytes_used += park_size_bytes;
+                        }
+                        break;
+                    }
+                }));
+    }
     for (auto &it: threads)
     {
         it.join();
     }
 
-    StatusUpdate::StartSeg("2." + to_string((uint32_t)table_index) + ".2S");
+    uint64_t num_bytes_total = 0;
+    for (auto & it: bytes_used_by_thread)
+    {
+        num_bytes_total += it;
+    }
+    *num_bytes_out = num_bytes_total;
 
-    delete buffers[table_index];
+    uint64_t num_checkpoints_total = 0;
+    for (auto & it: checkpoints_used_by_thread)
+    {
+        num_checkpoints_total += it;
+    }
+    *num_checkpoints_out = num_checkpoints_total;
+
+
+}
+
+// Checkpoints of Y values used in C3, returns bytes used
+template <PlotConf conf>
+uint64_t Plotter<conf>::writeC1(vector<uint64_t>* y_cpoints, uint8_t* table_out)
+{
+    uint64_t bytes_used = 0;
+    uint8_t entry_len_bytes = ((conf.K+7)/8)*y_cpoints.size();
+
+    memset(table_out, 0, entry_len_bytes*y_cpoints.size());
+
+    for (auto & y : y_cpoints)
+    {
+        uint64_t y_big = bswap_64(y);
+        bitcopy<0, entry_len_bytes, 64 - conf.K, 8>(table_out + bytes_used, (uint8_t*)&y_big);
+        bytes_used += entry_len_bytes;
+    }
+    return bytes_used;
+}
+
+// Checkpoints of Y values used in C1, returns bytes used
+template <PlotConf conf>
+uint64_t Plotter<conf>::writeC2(vector<uint64_t>* y_cpoints, uint8_t* table_out)
+{
+    uint64_t bytes_used = 0;
+    uint8_t entry_len_bytes = ((conf.K+7)/8)*y_cpoints.size();
+    uint32_t num_entries = y_cpoints.size()/kCheckpoint2Interval;
+
+    memset(table_out, 0, entry_len_bytes*num_entries);
+
+    for (uint32_t i = 0; i < num_entries; i++)
+    {
+        uint64_t y_big = bswap_64(y_cpoints[i*kCheckpoint2Interval]);
+        bitcopy<0, entry_len_bytes, 64 - conf.K, 8>(table_out + bytes_used, (uint8_t*)&y_big);
+        bytes_used += entry_len_bytes;
+    }
+    return bytes_used;
+}
+
+template <PlotConf conf, uint8_t table_index>
+void Plotter<conf>::Context::generate(Penguin<FwdGIDEntry<conf, table_index>, conf.interlace_factor>* gid_penguin, )
+{
+
 }
 
 template <PlotConf conf>
-void Plotter<conf>::phase3()
+void Plotter<conf>::deduplicateAndCompressPlotToFile()
 {
     StatusUpdate::StartSeg("2.-1.1S");
 
-
     uint64_t phase_start_seconds = time(nullptr);
-	// Try to predict an upper bound to the final file size
-	uint64_t predicted_file_size_bytes = 128;// header
-	for (uint8_t table_index = 0; table_index < 6; table_index++)
-	{
-		uint64_t park_size_bytes = EntrySizes::CalculateParkSize(conf.K, table_index+1);
-		auto final_park = *(phase1_graph_parks[table_index].end() - 1);
-		uint64_t num_parks = (final_park->start_pos + final_park->size() + kEntriesPerPark-1)/kEntriesPerPark;
-		predicted_file_size_bytes += park_size_bytes*num_parks;
-	}
 
-    uint64_t total_C1_entries = cdiv(((*(phase1_final_parks.end() - 1))->start_pos + (*(phase1_final_parks.end() - 1))->size()), kCheckpoint1Interval);
-    uint64_t total_C2_entries = cdiv(total_C1_entries, kCheckpoint2Interval);
-    uint32_t size_C3 = EntrySizes::CalculateC3Size(conf.K);
-    predicted_file_size_bytes += (total_C1_entries + 1) * (Util::ByteAlign(conf.K) / 8) + (total_C2_entries + 1) * (Util::ByteAlign(conf.K) / 8) + (total_C1_entries)*size_C3;
-
-    output_buffer = new Buffer(predicted_file_size_bytes<<1, filename);
+    output_buffer = new Buffer((1ULL<<conf.K)*28, filename);
     //output_buffer = new Buffer(predicted_file_size_bytes*1.5);
 
     // 19 bytes  - "Proof of Space Plot" (utf-8)
@@ -215,17 +186,68 @@ void Plotter<conf>::phase3()
 
     pointer_table_offset = output_buffer->InsertData(final_table_begin_pointers, sizeof(final_table_begin_pointers));
 
+    auto gid_penguin_6 = new Penguin<RevGIDEntry<conf, 6>, conf.interlace_factor>();
 
-    phase3DoTable<0>();
-    phase3DoTable<1>();
-    phase3DoTable<2>();
-    phase3DoTable<3>();
-    phase3DoTable<4>();
-    phase3DoTable<5>();
-	final_table_begin_pointers[6] = bswap_64(*(output_buffer->insert_pos));
+    vector<uint64_t> y_cpoints(((1ULL<<conf.K)*2)/kCheckpoint1Interval);
 
-    StatusUpdate::EndSeg();
-    cout << "Phase 3 finished in " << time(nullptr) - phase_start_seconds << "s" << endl;
+    // Do C3
+    final_table_begin_pointers[9] = bswap_64(*(output_buffer->insert_pos));
+    coordinator = 0;
+    vector<thread> threads;
+    vector<uint64_t> num_bytes_per_context;
+    vector<uint64_t> num_checkpoints_per_context;
+    for (uint32_t i = 0; i < this->contexts.size(); i++)
+    {
+        num_bytes_per_context.push_back(0);
+        uint64_t* num_bytes = num_bytes_per_context.end()-1;
+
+        num_checkpoints_per_context.push_back(0);
+        uint64_t* num_checkpoints = num_checkpoints_per_context.end()-1;
+
+        threads.push_back(thread( [this, i, gid_penguin_6, y_cpoints, num_bytes, num_checkpoints] {
+            this->contexts[i]->template writeC3(
+                    gid_penguin_6,
+                    this->output_buffer.data + (*this->output_buffer->insert_pos),
+                    &y_cpoints,
+                    &num_bytes,
+                    &num_checkpoints);
+        }));
+    }
+    for (auto & thread : threads)
+    {
+        thread.join();
+    }
+
+    // Clear penguins
+    for (auto & context : contexts)
+    {
+        delete context->forward_pass_final_yc_penguin;
+    }
+
+    uint64_t num_bytes_used = 0;
+    for (auto & it : num_bytes_per_context)
+    {
+        num_bytes_used += it;
+    }
+    output_buffer->insert_pos->fetch_add(num_bytes_used);
+
+    uint64_t num_checkpoints = 0;
+    for (auto & it : num_checkpoints_per_context)
+    {
+        num_checkpoints += it;
+    }
+    y_cpoints.resize(num_checkpoints);
+
+    // C1
+    final_table_begin_pointers[7] = bswap_64(*(output_buffer->insert_pos));
+    num_bytes_used = writeC1(&y_cpoints, this->output_buffer.data + (*this->output_buffer->insert_pos));
+    output_buffer->insert_pos->fetch_add(num_bytes_used);
+
+    // C2
+    final_table_begin_pointers[8] = bswap_64(*(output_buffer->insert_pos));
+    num_bytes_used = writeC2(&y_cpoints, this->output_buffer.data + (*this->output_buffer->insert_pos));
+    output_buffer->insert_pos->fetch_add(num_bytes_used);
+
 }
 
 #include "explicit_templates.hpp"

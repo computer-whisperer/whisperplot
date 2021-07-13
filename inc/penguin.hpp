@@ -6,73 +6,83 @@
 #include "calculate_bucket.hpp"
 #include "pos_constants.hpp"
 
-#include "atomic_bitpacker.hpp"
-#include "bitpacker.hpp"
 #include "packed_array.hpp"
 
-
-
-template <class entry_type, uint32_t interlace_factor>
+template <class entry_type, bool threadsafe>
 class Penguin
 {
     static constexpr bool use_hugepages = false;
 
     static constexpr uint64_t hugepage_len = 1ULL << 21;
 
-    using Row = BasePackedArray<entry_type, entry_type::max_entries_per_row*interlace_factor, 8>;
+    static constexpr uint64_t row_len_bytes = (entry_type::max_entries_per_row*entry_type::len_bits+7)/8;
 
-    static constexpr uint64_t sort_row_count = entry_type::num_rows_v;
-    static constexpr uint64_t store_row_count = (sort_row_count + interlace_factor - 1)/interlace_factor;
+    static constexpr uint64_t row_count = entry_type::num_rows;
 
-    std::atomic<uint32_t> pop_counts[store_row_count];
+    using counter_type = typename std::conditional<threadsafe, std::atomic<uint64_t>, uint64_t>::type;
 
-    std::atomic<uint64_t> entry_counts[sort_row_count];
-    Row* rows[store_row_count];
+    counter_type entry_counts[row_count];
+    uint8_t* rows[row_count];
 
-    static constexpr uint64_t row_size_bytes = use_hugepages ?  ((sizeof(Row) + hugepage_len - 1)/hugepage_len)*hugepage_len : sizeof(Row);
+    using overlap_entry_id_type = uint64_t;
+    static constexpr size_t overlap_row_len = entry_type::max_overlaps_per_row*sizeof(overlap_entry_id_type);
+    static constexpr size_t overlap_total_allocation_len =
+            use_hugepages ? ((overlap_row_len*row_count*2 + hugepage_len - 1)/hugepage_len)*hugepage_len : overlap_row_len*row_count*2;
+    overlap_entry_id_type * overlap_allocation_data;
+
+    counter_type upper_overlap_entry_counts[row_count];
+    counter_type lower_overlap_entry_counts[row_count];
+
+    static constexpr uint64_t row_size_bytes = use_hugepages ?  ((row_len_bytes + hugepage_len - 1)/hugepage_len)*hugepage_len : row_len_bytes;
+
+    static uint8_t* do_mmap(uint64_t len_bytes)
+    {
+        int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE;
+        if (use_hugepages)
+            flags |= MAP_HUGETLB;
+        uint8_t* dat = (uint8_t *) mmap(nullptr, len_bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
+        if (dat == nullptr)
+        {
+            throw std::runtime_error("Failed to mmap for penguin");
+        }
+        if (madvise(dat, len_bytes, MADV_DONTDUMP))
+        {
+            throw std::runtime_error("Failed to MADV_DONTDUMP for penguin");
+        }
+        return dat;
+    }
 
 public:
     inline Penguin()
     {
-        for (uint32_t i = 0; i < store_row_count; i++) {
-            int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE;
-            if (use_hugepages)
-                flags |= MAP_HUGETLB;
-            uint8_t *test = (uint8_t *) mmap(nullptr, row_size_bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
-            rows[i] = (Row *) test;
-            if (test == nullptr)
-            {
-                throw std::runtime_error("Failed to mmap for penguin");
-            }
-
-            if (madvise(test, row_size_bytes, MADV_DONTDUMP))
-            {
-                throw std::runtime_error("Failed to MADV_DONTDUMP for penguin");
-            }
-        /*    if (use_hugepages)
-            {
-                if (madvise(test, row_size_bytes, MADV_HUGEPAGE))
-                {
-                    throw std::runtime_error("Failed to MADV_HUGEPAGE for penguin");
-                }
-            }*/
+        // Allocate memory for overlap rows
+        if constexpr(overlap_total_allocation_len > 0)
+        {
+            overlap_allocation_data = (overlap_entry_id_type*)do_mmap(overlap_total_allocation_len);
+        }
+        for (uint32_t i = 0; i < row_count; i++) {
+            rows[i] = do_mmap(row_size_bytes);
         }
         for (auto& it : entry_counts)
         {
             it = 0;
         }
-        if (interlace_factor > 1)
+        for (auto& it : upper_overlap_entry_counts)
         {
-            for (auto& it : pop_counts)
-            {
-                it = 0;
-            }
+            it = 0;
+        }
+        for (auto& it : lower_overlap_entry_counts)
+        {
+            it = 0;
         }
     }
 
     inline ~Penguin()
     {
-        for (uint32_t i = 0; i < store_row_count; i++)
+        if constexpr(overlap_total_allocation_len > 0) {
+            munmap(overlap_allocation_data, overlap_total_allocation_len);
+        }
+        for (uint32_t i = 0; i < row_count; i++)
         {
             if (1 || use_hugepages)
             {
@@ -85,67 +95,45 @@ public:
         }
     }
 
-    inline uint64_t addEntry(entry_type entry)
+    inline entry_type newEntry(uint128_t y)
     {
-        uint64_t sort_row_id = entry.getRow();
-        assert(sort_row_id < sort_row_count);
-        uint64_t idx = entry_counts[sort_row_id]++;
-        uint64_t store_row_id = sort_row_id / interlace_factor;
-        uint32_t interlace = sort_row_id % interlace_factor;
-        if (idx >= entry_type::max_entries_per_row)
-        {
-            throw std::runtime_error("Too many entries for row.");
-        }
-        rows[store_row_id]->set(interlace + idx*interlace_factor, entry);
-        return idx;
+        uint64_t row_id = entry_type::getRowFromY(y);
+        assert(row_id < row_count);
+        entry_type entry(rows[row_id], entry_counts[row_id]++, row_id);
+        entry.setY(y);
+        return entry;
     }
 
     inline uint64_t getCountInRow(uint64_t sort_row_id)
     {
-        assert(sort_row_id < sort_row_count);
+        assert(sort_row_id < row_count);
         return entry_counts[sort_row_id];
     }
 
     inline entry_type readEntry(uint64_t sort_row_id, uint64_t entry_id)
     {
-        assert(sort_row_id < sort_row_count);
-        uint64_t store_row_id = sort_row_id / interlace_factor;
-        uint32_t interlace = sort_row_id % interlace_factor;
-        entry_type entry = rows[store_row_id]->get(interlace + entry_id*interlace_factor);
-        entry.setRow(sort_row_id);
-        return entry;
+        assert(sort_row_id < row_count);
+        return entry_type(rows[sort_row_id], entry_id, sort_row_id);
     }
     inline void popRow(uint64_t row_id)
     {
-        assert(row_id < sort_row_count);
-
-        uint64_t store_row_id = row_id/interlace_factor;
-        if (interlace_factor > 1)
-            pop_counts[store_row_id]++;
-
-        if ((interlace_factor == 1) || (pop_counts[store_row_id] == interlace_factor))
+        assert(row_id < row_count);
+        if (use_hugepages)
         {
-            if (use_hugepages)
+            if (munmap(rows[row_id], row_size_bytes))
             {
-                if (munmap(rows[store_row_id], row_size_bytes))
-                {
-                    std::cerr << "Failed to munmap:" << strerror(errno) << std::endl;
-                }
-            }
-            else
-            {
-                if (madvise(rows[store_row_id], row_size_bytes, MADV_FREE))
-                {
-                    std::cerr << "Failed to MADV_FREE:" << strerror(errno) << std::endl;
-                }
+                std::cerr << "Failed to munmap:" << strerror(errno) << std::endl;
             }
         }
+        else
+        {
+            if (madvise(rows[row_id], row_size_bytes, MADV_FREE))
+            {
+                std::cerr << "Failed to MADV_FREE:" << strerror(errno) << std::endl;
+            }
+        }
+
     }
-    /*
-    inline uint64_t getUniqueIdentifier(uint64_t sort_row_id, uint32_t entry_id)
-    {
-        return sort_row_id + entry_id * entry_type::num_rows_v;
-    }*/
 
 };
 

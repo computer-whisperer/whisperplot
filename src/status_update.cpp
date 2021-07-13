@@ -3,26 +3,29 @@
 //
 #include "status_update.hpp"
 #include <iostream>
+#include <chrono>
 
-static uint64_t last_segment_start;
+static std::chrono::high_resolution_clock::time_point last_segment_start;
+static bool has_started = false;
 
 void StatusUpdate::Init()
 {
-    last_segment_start = 0;
+    has_started = false;
 }
 
 void StatusUpdate::StartSeg(std::string seg_name)
 {
-    if (last_segment_start > 0)
+    if (has_started)
     {
         EndSeg();
     }
     std::cout << seg_name;
-    last_segment_start = time(nullptr);
+    last_segment_start = std::chrono::high_resolution_clock::now();
+    has_started = true;
 }
 
 void StatusUpdate::EndSeg()
 {
-    std::cout << " (" << time(nullptr) - last_segment_start << "s)" << std::endl;
-    last_segment_start = 0;
+    std::cout << " (" << duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
+    has_started = false;
 }
