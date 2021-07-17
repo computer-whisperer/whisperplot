@@ -96,3 +96,4 @@ target_link_libraries(whisperplot fse numa stdc++fs Threads::Threads bls)
 
 
 add_executable(outputStreamCountTest experiments/outputStreamCountTest.cpp)
+target_link_libraries(outputStreamCountTest m)

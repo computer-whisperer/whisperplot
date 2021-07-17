@@ -11,6 +11,7 @@
 #include <ctime>
 #include <chrono>
 #include <condition_variable>
+#include <math.h>
 #include <sys/mman.h>
 
 using namespace std;
@@ -44,7 +45,8 @@ void allocBuffer()
     }
 
     memset(big_buffer, 5, sizeof(uint64_t)*multiplier*num_entries);
-    std::cout << " (" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
+    uint64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count();
+    std::cout << " (" << ms << "ms)" << std::endl;
 }
 
 void doTest(uint64_t row_count)
@@ -60,7 +62,7 @@ void doTest(uint64_t row_count)
 
     auto last_segment_start = std::chrono::high_resolution_clock::now();
 
-  //  std::cout << row_count << ", ";
+    std::cout << row_count << ", ";
 
     for (uint64_t i = 0; i < num_entries; i++)
     {
@@ -76,7 +78,8 @@ void doTest(uint64_t row_count)
             __builtin_prefetch(&(big_buffer[row*row_len + entry+1]));
     }
 
-    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << std::endl;
+    uint64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count();
+    std::cout << ms << ", " << static_cast<uint64_t>(ms/log2((double)row_count)) << std::endl;
 
 }
 
@@ -100,7 +103,8 @@ int main(int argc, char *argv[]) {
     }
 
     allocBuffer();
-    for (uint32_t i = 0; i < 18; i++)
+    std::cout << "row_count, time, time/log2(row_count)" << endl;
+    for (uint32_t i = 5; i < 18; i++)
     {
         doTest(1ULL << i);
     }
