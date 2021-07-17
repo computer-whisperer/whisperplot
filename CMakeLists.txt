@@ -93,3 +93,6 @@ target_include_directories(uint128 PUBLIC chiapos_inc/uint128_t)
 
 
 target_link_libraries(whisperplot fse numa stdc++fs Threads::Threads bls)
+
+
+add_executable(outputStreamCountTest experiments/outputStreamCountTest.cpp)

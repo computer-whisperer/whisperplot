@@ -195,15 +195,16 @@ template<PlotConf conf, int8_t table_index>
 class FwdYCEntry
 {
 public:
-    static const constexpr uint16_t num_bc_buckets_per_row = 256;
+    static const constexpr uint16_t num_bc_buckets_per_row = 512;
     static const constexpr uint64_t row_divisor = kBC*num_bc_buckets_per_row;
     static const constexpr uint64_t getRowFromY(uint64_t y)
     {
         return y/row_divisor;
     }
     static const constexpr uint64_t num_rows = getRowFromY(conf.getMaxY(table_index))+1;
-    static const constexpr uint64_t max_overlaps_per_row = 300;
-    static const constexpr uint64_t max_entries_per_row = 300*num_bc_buckets_per_row;
+    static const constexpr uint64_t max_entries_per_bc_bucket = (table_index < 5) ? 350 : 350*64;
+    static const constexpr uint64_t max_overlaps_per_row = max_entries_per_bc_bucket;
+    static const constexpr uint64_t max_entries_per_row = max_entries_per_bc_bucket*num_bc_buckets_per_row;
     static const constexpr uint64_t c_len_bytes = (conf.getCLen(table_index) + 7) / 8;
     static const constexpr uint64_t packed_y_len_bits = ceillog2(row_divisor);
     static const constexpr uint64_t gid_len_bits = ceillog2(conf.getMaxGID(table_index));
@@ -257,7 +258,7 @@ public:
     static uint64_t getRowFromY(uint64_t y)
     {
         uint128_t key_value = y;
-        uint128_t key_value_max = conf.getMaxGID(table_index+1);
+        uint128_t key_value_max = conf.getMaxGID(table_index);
 
         for (uint8_t i = 0; i < table_index; i++)
         {
@@ -277,9 +278,9 @@ public:
     }
     static const constexpr uint64_t num_rows = 1ULL << 14;
     static const constexpr uint64_t max_overlaps_per_row = 0;
-    static const constexpr uint64_t max_entries_per_row = 1ULL << 19;
-    static const constexpr uint64_t gid_len_bits = ceillog2(conf.getMaxGID(table_index+1));
-    static const constexpr uint64_t right_gid_len_bits = ceillog2(conf.getMaxGID(table_index));
+    static const constexpr uint64_t max_entries_per_row = 1ULL << 18;
+    static const constexpr uint64_t gid_len_bits = ceillog2(conf.getMaxGID(table_index));
+    static const constexpr uint64_t right_gid_len_bits = ceillog2(conf.getMaxGID(table_index-1));
 
     struct entryWithRightGID
     {

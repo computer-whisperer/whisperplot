@@ -11,7 +11,7 @@
 template <class entry_type, bool threadsafe>
 class Penguin
 {
-    static constexpr bool use_hugepages = false;
+    static constexpr bool use_hugepages = true;
 
     static constexpr uint64_t hugepage_len = 1ULL << 21;
 
@@ -99,7 +99,12 @@ public:
     {
         uint64_t row_id = entry_type::getRowFromY(y);
         assert(row_id < row_count);
-        entry_type entry(rows[row_id], entry_counts[row_id]++, row_id);
+        uint64_t entry_id = entry_counts[row_id]++;
+        if (entry_id >= entry_type::max_entries_per_row)
+        {
+            throw std::runtime_error("too many entries for penguin row");
+        }
+        entry_type entry(rows[row_id], entry_id, row_id);
         entry.setY(y);
         return entry;
     }

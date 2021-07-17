@@ -22,6 +22,7 @@ Penguin<FwdYCEntry<conf, -1>, true>* Plotter<conf>::Context::createFirstTable()
 {
     auto output_penguin = new Penguin<FwdYCEntry<conf, -1>, true>();
 
+
     vector<thread> threads;
 
     for (auto & cpu_id : cpu_ids)
@@ -211,7 +212,7 @@ public:
                                                                                              right_entry.c);
 
             // Copy in L
-            bitCopy<out_bucket_type::c_len_bytes * 8 - c_len_in * 2, out_bucket_type::c_len_bytes,
+            bitCopy<out_bucket_type::c_len_bytes * 8sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid' - c_len_in * 2, out_bucket_type::c_len_bytes,
                     in_bucket_type::c_len_bytes * 8 - c_len_in, in_bucket_type::c_len_bytes>(new_entry.c, left_entry.c);
         } else if constexpr (table_index < 5) {
             // Copy from hash result
@@ -291,7 +292,9 @@ class EntryMatcher
 {
 public:
 
-    static constexpr  uint32_t num_entries_per_buffer = 17;
+    uint32_t matcher_id = 0;
+
+    static constexpr  uint32_t num_entries_per_buffer = FwdYCEntry<conf, table_index-1>::num_bc_buckets_per_row/8;
     static constexpr uint32_t num_buckets_per_row = FwdYCEntry<conf, table_index-1>::num_bc_buckets_per_row;
 
     struct entryWithC
@@ -316,7 +319,7 @@ public:
     {
         for (auto & it : match_staging_used_map)
         {
-            it = 0;
+            it.reset();
         }
         for (auto & penguin : penguins)
         {
@@ -353,6 +356,10 @@ public:
                     memcpy(match_staging[bc][pos].c, tmp_entry.c,
                            FwdYCEntry<conf, table_index - 1>::c_len_bytes);
                 }
+                if ((match_staging[bc][pos].bucket_id == 0) && (match_staging[bc][pos].gid == 0))
+                {
+                    throw runtime_error("Found problem");
+                }
                 // Mark used
                 match_staging_used_map[bc][pos] = true;
             }
@@ -370,7 +377,10 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
     auto output_gid_penguin = new Penguin<FwdGIDEntry<conf, table_index>, true>();
     this->forward_pass_gid_penguins[table_index] = (void *) output_gid_penguin;
 
-    vector<EntryMatcher<conf, table_index>> entry_matchers(3);
+    //cout << " " << sizeof(EntryMatcher<conf, table_index>) << " bytes" << endl;
+
+    const uint8_t num_entry_matchers = 8;
+    vector<EntryMatcher<conf, table_index>> entry_matchers(num_entry_matchers);
     atomic<int64_t> latest_active_matcher_buffer = -1;
     atomic<uint64_t> context_coordinator = 0;
     uint64_t last_matcher_buffer = (1ULL << 63);
@@ -381,6 +391,7 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
         threads.push_back(thread([this,
                                          cpu_id,
                                          &entry_matchers,
+                                         &num_entry_matchers,
                                          &last_matcher_buffer,
                                          &latest_active_matcher_buffer,
                                          &context_coordinator,
@@ -404,13 +415,18 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
             matches.reserve(conf.max_gid_stub_val);
 
             while (true) {
-                uint32_t batch_num = this->plotter->coordinator++;
+                uint32_t batch_num = context_coordinator++;
                 uint16_t b_id = batch_num % kB;
                 uint32_t matcher_buffer_needed = batch_num / kB;
 
+                if (b_id == 0)
+                {
+                    context_coordinator.notify_all();
+                }
+
                 // Wait for the necessary buffer to be available
                 {
-                    uint32_t matcher_buffer_avail = latest_active_matcher_buffer.load();
+                    int64_t matcher_buffer_avail = latest_active_matcher_buffer.load();
                     if (matcher_buffer_avail < matcher_buffer_needed) {
                         latest_active_matcher_buffer.wait(matcher_buffer_avail);
                     }
@@ -420,22 +436,31 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
                     }
                     // TODO: handle finish
                 }
-                EntryMatcher<conf, table_index> *matcher = &entry_matchers[matcher_buffer_needed %
-                                                                          entry_matchers.size()];
+                EntryMatcher<conf, table_index> *matcher = &entry_matchers[matcher_buffer_needed%num_entry_matchers];
 
                 // Staging area is filled, now search for matches
-                for (uint16_t c_id = 0; c_id < kC; c_id++) {
-                    uint16_t bc = b_id * kC + c_id;
+                for (int32_t c_id = 0; c_id < kC; c_id++) {
+                    int32_t bc = b_id * kC + c_id;
 
                     // bc targets for right and left match candidates
                     uint16_t right_targets[2][64];
                     uint16_t left_targets[2][64];
                     for (uint8_t parity = 0; parity < 2; parity++) {
-                        for (uint16_t m = 0; m < kExtraBitsPow; m++) {
-                            right_targets[parity][m] =
-                                    ((b_id + m) % kB) * kC + ((bc + (2 * m + parity) * (2 * m + parity)) % kC);
-                            left_targets[parity][m] =
-                                    ((b_id - m) % kB) * kC + ((bc - (2 * m + parity) * (2 * m + parity)) % kC);
+                        for (int32_t m = 0; m < kExtraBitsPow; m++) {
+                            int32_t ra = (b_id + m) % kB;
+                            ra = (ra < 0) ? ra + kB : ra;
+                            int32_t rb = (bc + (2 * m + parity) * (2 * m + parity)) % kC;
+                            rb = (rb < 0) ? rb + kC : rb;
+                            right_targets[parity][m] = ra * kC + rb;
+                            int32_t la = (b_id - m) % kB;
+                            la = (la < 0) ? la + kB : la;
+                            int32_t lb = (bc - (2 * m + parity) * (2 * m + parity)) % kC;
+                            lb = (lb < 0) ? lb + kC : lb;
+                            left_targets[parity][m] = la*kC + lb;
+                            if ((right_targets[parity][m] > kBC) || (left_targets[parity][m] > kBC))
+                            {
+                                throw runtime_error("Stupid programmer alert!");
+                            }
                         }
                     }
 
@@ -465,6 +490,10 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
                                             match.entry = &(matcher->match_staging[r_bc][pos]);
                                             match.bc = r_bc;
                                             matches.push_back(match);
+                                            if ((match.entry->bucket_id == 0) && (match.entry->gid == 0))
+                                            {
+                                                throw runtime_error("Found problem");
+                                            }
                                         }
                                     }
                                     pos++;
@@ -490,6 +519,10 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
                                             match.entry = &(matcher->match_staging[l_bc][pos]);
                                             match.bc = l_bc;
                                             matches.push_back(match);
+                                            if ((match.entry->bucket_id == 0) && (match.entry->gid == 0))
+                                            {
+                                                throw runtime_error("Found problem");
+                                            }
                                         }
                                     }
                                     pos++;
@@ -587,6 +620,7 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
                         }
                     }
                 }
+
             }
             num_matches_out += num_matches_in_thread;
         }));
@@ -597,7 +631,9 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
     uint32_t matcher_id = 0;
     while ((row_id = plotter->coordinator++) < FwdYCEntry<conf, table_index-1>::num_rows)
     {
-        entry_matchers[matcher_id%entry_matchers.size()].loadRow(prev_penguins, row_id);
+        entry_matchers[matcher_id%num_entry_matchers].matcher_id = 0xFFFF;
+        entry_matchers[matcher_id%num_entry_matchers].loadRow(prev_penguins, row_id);
+        entry_matchers[matcher_id%num_entry_matchers].matcher_id = matcher_id;
         latest_active_matcher_buffer = matcher_id;
         latest_active_matcher_buffer.notify_all();
 
@@ -608,9 +644,12 @@ Penguin<FwdYCEntry<conf, table_index>, true>*  Plotter<conf>::Context::createTab
             context_coordinator.wait(latest_coordinator_val);
         }
 
+
+
         matcher_id++;
     }
     last_matcher_buffer = latest_active_matcher_buffer;
+    latest_active_matcher_buffer++;
     latest_active_matcher_buffer.notify_all();
 
 
