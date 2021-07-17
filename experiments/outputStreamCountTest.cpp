@@ -7,6 +7,7 @@
 #include <vector>
 #include <atomic>
 #include <cstring>
+#include <sched.h>
 #include <ctime>
 #include <condition_variable>
 #include <sys/mman.h>
@@ -22,11 +23,11 @@ int fast_rand(void) {
     return (g_seed>>16)&0x7FFF;
 }
 
-constexpr uint64_t num_entries = 1ULL << 32;
+constexpr uint64_t num_entries = 1ULL << 28;
 
 uint64_t* big_buffer;
 
-constexpr uint64_t multiplier = 10;
+constexpr uint64_t multiplier = 5;
 
 constexpr bool use_hugepages = false;
 
@@ -65,7 +66,7 @@ void doTest(uint64_t row_count)
 
     auto last_segment_start = std::chrono::high_resolution_clock::now();
 
-    std::cout << "Starting test with " << row_count << " rows";
+    std::cout << row_count << ", ";
 
     for (uint64_t i = 0; i < num_entries; i++)
     {
@@ -79,14 +80,31 @@ void doTest(uint64_t row_count)
         big_buffer[row*row_len + entry] = val;
     }
 
-    std::cout << " (" << duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
+    std::cout << duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << std::endl;
 
 }
 
 int main(int argc, char *argv[]) {
     std::cout.setf( std::ios_base::unitbuf );
+
+    int cpuAffinity = argc > 1 ? atoi(argv[1]) : -1;
+
+    if (cpuAffinity > -1)
+    {
+        cpu_set_t mask;
+        int status;
+
+        CPU_ZERO(&mask);
+        CPU_SET(cpuAffinity, &mask);
+        status = sched_setaffinity(0, sizeof(mask), &mask);
+        if (status != 0)
+        {
+            perror("sched_setaffinity");
+        }
+    }
+
     allocBuffer();
-    for (uint32_t i = 0; i < 30; i++)
+    for (uint32_t i = 0; i < 18; i++)
     {
         doTest(1ULL << i);
     }
