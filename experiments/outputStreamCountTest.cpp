@@ -15,14 +15,6 @@
 
 using namespace std;
 
-uint64_t g_seed = 23;
-
-// Compute a pseudorandom integer.
-// Output value in range [0, 32767]
-int fast_rand(void) {
-    g_seed = (214013*g_seed+2531011);
-    return (g_seed>>16)&0x7FFF;
-}
 
 constexpr uint64_t num_entries = 1ULL << 28;
 
@@ -31,7 +23,7 @@ uint64_t* big_buffer;
 constexpr uint64_t multiplier = 5;
 
 constexpr bool use_hugepages = false;
-constexpr bool use_prefetch = false;
+constexpr bool use_prefetch = true;
 
 void allocBuffer()
 {
@@ -64,15 +56,15 @@ void doTest(uint64_t row_count)
         it = 0;
     }
 
-    g_seed = 332;
+    srand(332);
 
     auto last_segment_start = std::chrono::high_resolution_clock::now();
 
-    std::cout << row_count << ", ";
+  //  std::cout << row_count << ", ";
 
     for (uint64_t i = 0; i < num_entries; i++)
     {
-        uint64_t val = fast_rand();
+        uint64_t val = rand();
         uint64_t row = val%row_count;
         uint64_t entry = entry_counts[row]++;
         if (entry >= row_len)
