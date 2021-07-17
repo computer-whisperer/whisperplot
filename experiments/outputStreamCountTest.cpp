@@ -31,6 +31,7 @@ uint64_t* big_buffer;
 constexpr uint64_t multiplier = 5;
 
 constexpr bool use_hugepages = false;
+constexpr bool use_prefetch = false;
 
 void allocBuffer()
 {
@@ -79,6 +80,8 @@ void doTest(uint64_t row_count)
             throw std::runtime_error("Too many entries");
         }
         big_buffer[row*row_len + entry] = val;
+        if (use_prefetch)
+            __builtin_prefetch(&(big_buffer[row*row_len + entry+1]));
     }
 
     std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << std::endl;
