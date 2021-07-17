@@ -9,6 +9,7 @@
 #include <cstring>
 #include <sched.h>
 #include <ctime>
+#include <chrono>
 #include <condition_variable>
 #include <sys/mman.h>
 
@@ -27,7 +28,7 @@ constexpr uint64_t num_entries = 1ULL << 28;
 
 uint64_t* big_buffer;
 
-constexpr uint64_t multiplier = 4;
+constexpr uint64_t multiplier = 5;
 
 constexpr bool use_hugepages = false;
 
@@ -49,7 +50,7 @@ void allocBuffer()
         throw std::runtime_error("Failed to MADV_DONTDUMP");
     }
 
-    memset(big_buffer, 5, sizeof(uint64_t)*2*num_entries);
+    memset(big_buffer, 5, sizeof(uint64_t)*multiplier*num_entries);
     std::cout << " (" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
 }
 
