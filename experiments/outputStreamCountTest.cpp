@@ -27,7 +27,7 @@ constexpr uint64_t num_entries = 1ULL << 28;
 
 uint64_t* big_buffer;
 
-constexpr uint64_t multiplier = 5;
+constexpr uint64_t multiplier = 4;
 
 constexpr bool use_hugepages = false;
 
@@ -50,7 +50,7 @@ void allocBuffer()
     }
 
     memset(big_buffer, 5, sizeof(uint64_t)*2*num_entries);
-    std::cout << " (" << duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
+    std::cout << " (" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << "ms)" << std::endl;
 }
 
 void doTest(uint64_t row_count)
@@ -80,7 +80,7 @@ void doTest(uint64_t row_count)
         big_buffer[row*row_len + entry] = val;
     }
 
-    std::cout << duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << std::endl;
+    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - last_segment_start).count() << std::endl;
 
 }
 
